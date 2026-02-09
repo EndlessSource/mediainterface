@@ -28,25 +28,41 @@ public final class ArtworkDecoder {
         }
 
         String value = artworkValue.trim();
-        try {
-            if (value.startsWith("file:") || value.startsWith("http://") || value.startsWith("https://")) {
+        String base64 = value;
+        int comma = value.indexOf(',');
+        if (value.startsWith("data:") && comma >= 0) {
+            base64 = value.substring(comma + 1);
+            try {
+                byte[] bytes = Base64.getDecoder().decode(base64);
+                return bytes.length == 0 ? Optional.empty() : Optional.of(bytes);
+            } catch (IllegalArgumentException ex) {
+                return Optional.empty();
+            }
+        }
+
+        if (value.startsWith("file:") || value.startsWith("http://") || value.startsWith("https://")) {
+            try {
                 URL url = URI.create(value).toURL();
                 return Optional.of(url.openStream().readAllBytes());
+            } catch (IllegalArgumentException | IOException ex) {
+                return Optional.empty();
             }
-            if (Files.exists(Path.of(value))) {
-                return Optional.of(Files.readAllBytes(Path.of(value)));
-            }
+        }
 
-            String base64 = value;
-            int comma = value.indexOf(',');
-            if (value.startsWith("data:") && comma >= 0) {
-                base64 = value.substring(comma + 1);
+        try {
+            Path path = Path.of(value);
+            if (Files.exists(path)) {
+                return Optional.of(Files.readAllBytes(path));
             }
-            byte[] bytes = Base64.getDecoder().decode(base64);
+        } catch (IllegalArgumentException | IOException ignored) {
+            // fall through to plain base64 decode
+        }
+
+        try {
+            byte[] bytes = Base64.getDecoder().decode(value);
             return bytes.length == 0 ? Optional.empty() : Optional.of(bytes);
-        } catch (IllegalArgumentException | IOException ex) {
+        } catch (IllegalArgumentException ex) {
             return Optional.empty();
         }
     }
 }
-

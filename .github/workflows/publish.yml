@@ -60,11 +60,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
+        shell: cmd
         run: >
-          .\gradlew.bat
+          gradlew.bat
           :mediainterface-windows:publish
           --no-daemon
-          -Pgpr.repo=${{ github.repository }}
+          "-Pgpr.repo=${{ github.repository }}"
 
   publish-macos:
     name: Publish macOS Module

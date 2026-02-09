@@ -63,6 +63,11 @@ allprojects {
     version = computeCiAwareVersion()
 }
 
+repositories {
+    mavenCentral()
+    gradlePluginPortal()
+}
+
 val allPublishableModules = setOf(
     ":mediainterface-core",
     ":mediainterface-linux",

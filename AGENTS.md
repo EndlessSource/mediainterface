@@ -85,3 +85,4 @@ If native code changed, also run:
 ## Commit Hygiene
 - Do not leave README support tables stale after feature changes.
 - Avoid committing IDE directories/files.
+- Do NOT put non-consumer docs in README. The readme should only be a overview over the project and a quickstart. Keep the README concise and do NOT put CI/publishing/... instructions in it.

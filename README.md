@@ -44,3 +44,7 @@ Access the operating systems "Media Remote"/Now Playing interface from Java/Kotl
 | Linux    | N/A                    | Java DBUS/MPRIS2             |
 | Windows  | x64, ARM64             | JNI (`mediainterface_winrt`) |
 | macOS    | Intel, Apple Silicon   | Perl + MediaRemoteAdapter    |
+
+## License
+
+Java Media Interface is licensed under the Apache 2.0 License. (see `LICENSE`)

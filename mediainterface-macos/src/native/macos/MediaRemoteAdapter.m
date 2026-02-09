@@ -281,6 +281,20 @@ static NSNumber* estimateElapsedNow(NSNumber* elapsed, NSNumber* timestampEpoch,
     return @(estimated);
 }
 
+static NSNumber* effectivePlaybackRate(NSNumber* playbackRate, NSNumber* defaultPlaybackRate, NSNumber* playing) {
+    if (playbackRate && [playbackRate doubleValue] > 0.0) {
+        return playbackRate;
+    }
+    if (defaultPlaybackRate && [defaultPlaybackRate doubleValue] > 0.0) {
+        return defaultPlaybackRate;
+    }
+    if (playing && [playing boolValue]) {
+        // Some players report playbackRate=0 while actually playing.
+        return @(1.0);
+    }
+    return @(0.0);
+}
+
 static void waitForCommandCompletion(void) {
     ensureLoaded();
     if (!gGetNowPlayingAppPid || !gSerialDispatchQueue) {
@@ -305,6 +319,7 @@ static NSString* jsonOutput(NSDictionary* info, NSNumber* playing, NSString* bun
     NSNumber* elapsed = nil;
     NSNumber* timestampEpoch = nil;
     NSNumber* playbackRate = nil;
+    NSNumber* defaultPlaybackRate = nil;
 
     if (info) {
         id t = info[@"kMRMediaRemoteNowPlayingInfoTitle"];
@@ -327,6 +342,8 @@ static NSString* jsonOutput(NSDictionary* info, NSNumber* playing, NSString* bun
         timestampEpoch = extractTimestampEpochSeconds(ts);
         id rate = info[@"kMRMediaRemoteNowPlayingInfoPlaybackRate"];
         if ([rate respondsToSelector:@selector(doubleValue)]) playbackRate = @([rate doubleValue]);
+        id defaultRate = info[@"kMRMediaRemoteNowPlayingInfoDefaultPlaybackRate"];
+        if ([defaultRate respondsToSelector:@selector(doubleValue)]) defaultPlaybackRate = @([defaultRate doubleValue]);
     }
 
     if (title.length == 0) {
@@ -338,13 +355,16 @@ static NSString* jsonOutput(NSDictionary* info, NSNumber* playing, NSString* bun
     if (!effectivePlaying && playbackRate) {
         effectivePlaying = @([playbackRate doubleValue] > 0.0);
     }
+    NSNumber* resolvedRate = effectivePlaybackRate(playbackRate, defaultPlaybackRate, effectivePlaying);
 
     NSString* playingStr = effectivePlaying ? ([effectivePlaying boolValue] ? @"true" : @"false") : @"null";
     NSString* durationStr = duration ? [duration stringValue] : @"null";
     NSString* elapsedStr = elapsed ? [elapsed stringValue] : @"null";
-    NSNumber* elapsedNow = estimateElapsedNow(elapsed, timestampEpoch, duration, playbackRate);
+    NSNumber* elapsedNow = estimateElapsedNow(elapsed, timestampEpoch, duration, resolvedRate);
     NSString* elapsedNowStr = elapsedNow ? [elapsedNow stringValue] : @"null";
     NSString* timestampStr = timestampEpoch ? [timestampEpoch stringValue] : @"null";
+
+    NSString* playbackRateStr = resolvedRate ? [resolvedRate stringValue] : @"null";
     NSUInteger artworkChars = artworkBase64.length;
 
     NSString* app = (bundleIdentifier && bundleIdentifier.length > 0)
@@ -362,12 +382,12 @@ static NSString* jsonOutput(NSDictionary* info, NSNumber* playing, NSString* bun
              elapsedStr,
              elapsedNowStr,
              timestampStr,
-             playbackRate ? [playbackRate stringValue] : @"null",
+             resolvedRate ? [resolvedRate stringValue] : @"null",
              (unsigned long)artworkChars,
              summarizeForLog(artworkMimeType, 64)]);
 
     return [NSString stringWithFormat:
-            @"{\"bundleIdentifier\":\"%@\",\"playing\":%@,\"title\":\"%@\",\"artist\":\"%@\",\"album\":\"%@\",\"artworkData\":\"%@\",\"artworkMimeType\":\"%@\",\"duration\":%@,\"elapsedTime\":%@,\"elapsedTimeNow\":%@,\"timestamp\":%@}",
+            @"{\"bundleIdentifier\":\"%@\",\"playing\":%@,\"title\":\"%@\",\"artist\":\"%@\",\"album\":\"%@\",\"artworkData\":\"%@\",\"artworkMimeType\":\"%@\",\"duration\":%@,\"elapsedTime\":%@,\"elapsedTimeNow\":%@,\"timestamp\":%@,\"playbackRate\":%@}",
             escapeJson(app),
             playingStr,
             escapeJson(title),
@@ -378,7 +398,8 @@ static NSString* jsonOutput(NSDictionary* info, NSNumber* playing, NSString* bun
             durationStr,
             elapsedStr,
             elapsedNowStr,
-            timestampStr];
+            timestampStr,
+            playbackRateStr];
 }
 
 void adapter_get(void) {

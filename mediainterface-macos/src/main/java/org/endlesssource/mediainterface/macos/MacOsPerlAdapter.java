@@ -188,14 +188,54 @@ final class MacOsPerlAdapter {
         String artworkMimeType = extractJsonString(json, "artworkMimeType");
         String app = extractJsonString(json, "bundleIdentifier");
         Long durationMs = extractJsonDouble(json, "duration").map(v -> Math.round(v * 1000.0)).orElse(null);
-        Long positionMs = extractJsonDouble(json, "elapsedTimeNow")
-                .or(() -> extractJsonDouble(json, "elapsedTime"))
-                .map(v -> Math.round(v * 1000.0))
-                .orElse(null);
         String playingRaw = extractJsonBoolean(json, "playing").map(v -> v ? "1" : "0").orElse("u");
+        Double elapsedSeconds = extractJsonDouble(json, "elapsedTime").orElse(null);
+        Double elapsedNowSeconds = extractJsonDouble(json, "elapsedTimeNow").orElse(null);
+        Double timestampEpochSeconds = extractJsonDouble(json, "timestamp").orElse(null);
+        Double playbackRate = extractJsonDouble(json, "playbackRate").orElse(null);
+        Long positionMs = computePositionMillis(
+                elapsedSeconds,
+                elapsedNowSeconds,
+                timestampEpochSeconds,
+                playbackRate,
+                playingRaw,
+                durationMs
+        );
         boolean active = title != null && !title.isBlank();
         String artwork = toDataUri(artworkData, artworkMimeType);
         return new Snapshot(active, app, title, artist, album, artwork, durationMs, positionMs, playingRaw);
+    }
+
+    private static Long computePositionMillis(Double elapsedSeconds,
+                                              Double elapsedNowSeconds,
+                                              Double timestampEpochSeconds,
+                                              Double playbackRate,
+                                              String playingRaw,
+                                              Long durationMs) {
+        Double baseElapsed = elapsedSeconds != null ? elapsedSeconds : elapsedNowSeconds;
+        if (baseElapsed == null) {
+            return null;
+        }
+
+        double currentSeconds = baseElapsed;
+        boolean isPlaying = "1".equals(playingRaw);
+        if (isPlaying && timestampEpochSeconds != null && playbackRate != null && playbackRate > 0.0d) {
+            double nowEpochSeconds = System.currentTimeMillis() / 1000.0d;
+            double delta = Math.max(0.0d, nowEpochSeconds - timestampEpochSeconds);
+            currentSeconds = baseElapsed + (delta * playbackRate);
+        } else if (elapsedNowSeconds != null) {
+            currentSeconds = elapsedNowSeconds;
+        }
+
+        if (currentSeconds < 0.0d) {
+            currentSeconds = 0.0d;
+        }
+
+        long positionMs = Math.round(currentSeconds * 1000.0d);
+        if (durationMs != null && durationMs > 0L && positionMs > durationMs) {
+            positionMs = durationMs;
+        }
+        return positionMs;
     }
 
     private static String extractJsonString(String json, String key) {

@@ -25,7 +25,7 @@ fun computeCiAwareVersion(): String {
 }
 
 allprojects {
-    group = "org.endlesssource"
+    group = "org.endlesssource.mediainterface"
     version = computeCiAwareVersion()
 }
 
@@ -42,6 +42,19 @@ subprojects {
             if (!hasMavenJavaPublication && components.names.contains("java")) {
                 publications.create<MavenPublication>("mavenJava") {
                     from(components["java"])
+                }
+            }
+
+            publications.withType(MavenPublication::class.java).configureEach {
+                artifactId = when {
+                    project.name == "mediainterface-core" -> "core"
+                    project.name == "mediainterface-linux" -> "linux"
+                    project.name == "mediainterface-windows" -> "windows"
+                    project.name == "mediainterface-macos" -> "macos"
+                    project.name == "mediainterface-all" -> "all"
+                    project.name == "examples" -> "examples"
+                    project.name.startsWith("mediainterface-") -> project.name.removePrefix("mediainterface-")
+                    else -> project.name
                 }
             }
 

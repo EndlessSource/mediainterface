@@ -43,8 +43,9 @@ val exampleJarTasks = exampleMainClasses.map { (name, mainClassName) ->
             attributes["Main-Class"] = mainClassName
         }
         duplicatesStrategy = DuplicatesStrategy.INCLUDE
-        mergeServiceFiles()
-        append("META-INF/services/org.endlesssource.mediainterface.spi.PlatformMediaProvider")
+        mergeServiceFiles {
+            include("META-INF/services/org.endlesssource.mediainterface.spi.PlatformMediaProvider")
+        }
         exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")
         from(sourceSets.main.get().output)
     }

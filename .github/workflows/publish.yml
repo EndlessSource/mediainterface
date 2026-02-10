@@ -7,15 +7,78 @@ on:
       - "main"
     tags:
       - "v*"
+      - "[0-9]*"
 
 permissions:
   contents: read
 
 jobs:
-  publish-core-linux-all-examples:
-    name: Publish Core/Linux/All/Examples
+  build-native-windows:
+    name: Build Windows Native Resources
+    runs-on: windows-latest
+    if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Windows native resources
+        shell: cmd
+        run: >
+          gradlew.bat
+          :mediainterface-windows:processResources
+          --no-daemon
+
+      - name: Upload Windows native resources
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-resources
+          path: mediainterface-windows/build/resources/main/native/windows
+          if-no-files-found: error
+
+  build-native-macos:
+    name: Build macOS Native Resources
+    runs-on: macos-latest
+    if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build macOS native resources
+        run: >
+          ./gradlew
+          :mediainterface-macos:processResources
+          --no-daemon
+
+      - name: Upload macOS native resources
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-native-resources
+          path: mediainterface-macos/build/resources/main/native/macos
+          if-no-files-found: error
+
+  publish-central:
+    name: Publish To Central
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    needs: [build-native-windows, build-native-macos]
+    if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,6 +94,25 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Download Windows native resources
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-native-resources
+          path: .ci/native/windows
+
+      - name: Download macOS native resources
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-native-resources
+          path: .ci/native/macos
+
+      - name: Inject native resources
+        run: |
+          mkdir -p mediainterface-windows/src/main/resources/native/windows
+          mkdir -p mediainterface-macos/src/main/resources/native/macos
+          cp -R .ci/native/windows/. mediainterface-windows/src/main/resources/native/windows/
+          cp -R .ci/native/macos/. mediainterface-macos/src/main/resources/native/macos/
 
       - name: Publish snapshots
         if: github.ref == 'refs/heads/main'
@@ -42,11 +124,11 @@ jobs:
         run: >
           ./gradlew
           publishAggregationToCentralSnapshots
-          -Ppublish.modules=mediainterface-core,mediainterface-linux,mediainterface-all,examples
+          -Ppublish.modules=mediainterface-core,mediainterface-linux,mediainterface-windows,mediainterface-macos,mediainterface-all,examples
           --no-daemon
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.ref_type == 'tag'
         env:
           SONATYPE_USER: ${{ secrets.SONATYPE_USER }}
           SONATYPE_PASS: ${{ secrets.SONATYPE_PASS }}
@@ -55,99 +137,5 @@ jobs:
         run: >
           ./gradlew
           publishAggregationToCentralPortal
-          -Ppublish.modules=mediainterface-core,mediainterface-linux,mediainterface-all,examples
-          --no-daemon
-
-  publish-windows:
-    name: Publish Windows Module
-    runs-on: windows-latest
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Publish snapshot
-        if: github.ref == 'refs/heads/main'
-        env:
-          SONATYPE_USER: ${{ secrets.SONATYPE_USER }}
-          SONATYPE_PASS: ${{ secrets.SONATYPE_PASS }}
-          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
-          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
-        shell: cmd
-        run: >
-          gradlew.bat
-          publishAggregationToCentralSnapshots
-          -Ppublish.modules=mediainterface-windows
-          --no-daemon
-
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          SONATYPE_USER: ${{ secrets.SONATYPE_USER }}
-          SONATYPE_PASS: ${{ secrets.SONATYPE_PASS }}
-          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
-          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
-        shell: cmd
-        run: >
-          gradlew.bat
-          publishAggregationToCentralPortal
-          -Ppublish.modules=mediainterface-windows
-          --no-daemon
-
-  publish-macos:
-    name: Publish macOS Module
-    runs-on: macos-latest
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Publish snapshot
-        if: github.ref == 'refs/heads/main'
-        env:
-          SONATYPE_USER: ${{ secrets.SONATYPE_USER }}
-          SONATYPE_PASS: ${{ secrets.SONATYPE_PASS }}
-          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
-          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
-        run: >
-          ./gradlew
-          publishAggregationToCentralSnapshots
-          -Ppublish.modules=mediainterface-macos
-          --no-daemon
-
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          SONATYPE_USER: ${{ secrets.SONATYPE_USER }}
-          SONATYPE_PASS: ${{ secrets.SONATYPE_PASS }}
-          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
-          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
-        run: >
-          ./gradlew
-          publishAggregationToCentralPortal
-          -Ppublish.modules=mediainterface-macos
+          -Ppublish.modules=mediainterface-core,mediainterface-linux,mediainterface-windows,mediainterface-macos,mediainterface-all,examples
           --no-daemon

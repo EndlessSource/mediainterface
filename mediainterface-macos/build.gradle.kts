@@ -3,15 +3,8 @@ plugins {
 }
 
 val isMac = System.getProperty("os.name").lowercase().contains("mac")
-val jvmArch = System.getProperty("os.arch").lowercase()
-val macCmakeArch = when {
-    jvmArch.contains("aarch64") || jvmArch.contains("arm64") -> "arm64"
-    else -> "x86_64"
-}
-val macResourceArch = when (macCmakeArch) {
-    "x86_64" -> "x64"
-    else -> "arm64"
-}
+val macCmakeArchs = "x86_64;arm64"
+val macResourceArchs = listOf("x64", "arm64")
 
 dependencies {
     api(project(":mediainterface-core"))
@@ -32,7 +25,7 @@ val cmakeConfigureMacos = tasks.register<Exec>("cmakeConfigureMacos") {
         "cmake",
         "-S", nativeMacDir.asFile.absolutePath,
         "-B", nativeMacBuildDir.get().asFile.absolutePath,
-        "-DCMAKE_OSX_ARCHITECTURES=$macCmakeArch"
+        "-DCMAKE_OSX_ARCHITECTURES=$macCmakeArchs"
     )
 }
 
@@ -72,10 +65,18 @@ val zipMacosAdapterFramework = tasks.register<Zip>("zipMacosAdapterFramework") {
 val copyMacosAdapterAssets = tasks.register<Copy>("copyMacosAdapterAssets") {
     onlyIf { isMac }
     dependsOn(zipMacosAdapterFramework, cmakeBuildMacosAdapter)
-    from(zipMacosAdapterFramework.map { it.archiveFile })
-    from(nativeMacBuildDir.map { it.file("MediaRemoteAdapterTestClient") })
-    from(nativeMacBuildDir.map { it.file("Release/MediaRemoteAdapterTestClient") })
-    into(layout.buildDirectory.dir("resources/main/native/macos/adapter/$macResourceArch"))
+    macResourceArchs.forEach { arch ->
+        from(zipMacosAdapterFramework.map { it.archiveFile }) {
+            into(arch)
+        }
+        from(nativeMacBuildDir.map { it.file("MediaRemoteAdapterTestClient") }) {
+            into(arch)
+        }
+        from(nativeMacBuildDir.map { it.file("Release/MediaRemoteAdapterTestClient") }) {
+            into(arch)
+        }
+    }
+    into(layout.buildDirectory.dir("resources/main/native/macos/adapter"))
 }
 
 tasks.named("processResources") {

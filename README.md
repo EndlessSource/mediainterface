@@ -114,3 +114,8 @@ See [`examples` module](https://github.com/EndlessSource/mediainterface/tree/mai
 ## License
 
 Java Media Interface is licensed under the Apache 2.0 License. (see `LICENSE`)
+
+## Credits
+
+- [@TimLohrer](https://github.com/TimLohrer) for the idea
+- [mediaremote-adapter](https://github.com/ungive/mediaremote-adapter/) for the MediaRemote Perl workaround

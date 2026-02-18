@@ -118,7 +118,8 @@ final class WindowsMediaSession implements MediaSession {
 
             Optional<NowPlaying> currentNowPlaying = getNowPlaying();
             Snapshot snapshot = currentNowPlaying.map(Snapshot::fromNowPlaying).orElseGet(() -> Snapshot.fromPayload(null));
-            if (!snapshot.sameMedia(lastSnapshot)) {
+            boolean includePositionChanges = currentState == PlaybackState.PLAYING;
+            if (!snapshot.sameMedia(lastSnapshot, includePositionChanges)) {
                 lastSnapshot = snapshot;
                 listeners.forEach(listener -> listener.onNowPlayingChanged(this, currentNowPlaying));
             }
@@ -169,18 +170,22 @@ final class WindowsMediaSession implements MediaSession {
             return title.isEmpty() && artist.isEmpty() && album.isEmpty() && artwork.isEmpty() && durationMs.isEmpty();
         }
 
-        boolean sameMedia(Snapshot other) {
+        boolean sameMedia(Snapshot other, boolean includePositionChanges) {
             if (other == null) {
                 return false;
             }
+            boolean samePosition = !includePositionChanges
+                    || positionBucket(positionMs) == positionBucket(other.positionMs);
+            String normalizedMetadata = normalizeMetadataForComparison(metadataPairs);
+            String otherNormalizedMetadata = normalizeMetadataForComparison(other.metadataPairs);
             return title.equals(other.title)
                     && artist.equals(other.artist)
                     && album.equals(other.album)
                     && artwork.equals(other.artwork)
                     && durationMs.equals(other.durationMs)
-                    && positionBucket(positionMs) == positionBucket(other.positionMs)
+                    && samePosition
                     && live == other.live
-                    && metadataPairs.equals(other.metadataPairs);
+                    && normalizedMetadata.equals(otherNormalizedMetadata);
         }
 
         WindowsNowPlaying toNowPlaying() {
@@ -229,6 +234,37 @@ final class WindowsMediaSession implements MediaSession {
 
         private static long positionBucket(Optional<Long> positionMs) {
             return positionMs.map(ms -> ms / 1000L).orElse(-1L);
+        }
+
+        private static String normalizeMetadataForComparison(String metadata) {
+            if (metadata == null || metadata.isBlank()) {
+                return "";
+            }
+            StringBuilder out = new StringBuilder();
+            for (String line : metadata.split("\\R")) {
+                if (line == null || line.isBlank()) {
+                    continue;
+                }
+                int sep = line.indexOf('=');
+                if (sep <= 0) {
+                    out.append(line).append('\n');
+                    continue;
+                }
+                String key = line.substring(0, sep).trim();
+                if (isVolatileMetadataKey(key)) {
+                    continue;
+                }
+                out.append(line).append('\n');
+            }
+            return out.toString();
+        }
+
+        private static boolean isVolatileMetadataKey(String key) {
+            return "timelineRawPositionMs".equals(key)
+                    || "timelineLastUpdatedTicks".equals(key)
+                    || "timelineNowTicks".equals(key)
+                    || "playbackRate".equals(key)
+                    || "playbackStatus".equals(key);
         }
     }
 

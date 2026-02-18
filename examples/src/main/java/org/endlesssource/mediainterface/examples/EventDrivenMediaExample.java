@@ -33,7 +33,7 @@ public final class EventDrivenMediaExample {
         try (SystemMediaInterface media = SystemMediaFactory.createSystemInterface(options)) {
             logger.info("Event-driven example running (listener callbacks enabled). Press Ctrl+C to stop.");
 
-            media.addSessionListener(new MediaSessionListener() {
+            MediaSessionListener sessionListener = new MediaSessionListener() {
                 @Override
                 public void onSessionAdded(MediaSession session) {
                     logger.info("Session added: {} ({})", session.getApplicationName(), session.getSessionId());
@@ -63,20 +63,10 @@ public final class EventDrivenMediaExample {
                     logger.info("Now playing [{}]: {} - {} ({}/{})",
                             session.getApplicationName(), title, artist, position, duration);
                 }
-            });
+            };
 
-            media.getAllSessions().forEach(session -> session.addListener(new MediaSessionListener() {
-                @Override
-                public void onPlaybackStateChanged(MediaSession s, PlaybackState state) {
-                    logger.info("State changed [{}]: {}", s.getApplicationName(), state);
-                }
-
-                @Override
-                public void onNowPlayingChanged(MediaSession s, Optional<NowPlaying> nowPlaying) {
-                    String title = nowPlaying.flatMap(NowPlaying::getTitle).orElse("Unknown Title");
-                    logger.info("Initial listener [{}]: {}", s.getApplicationName(), title);
-                }
-            }));
+            media.addSessionListener(sessionListener);
+            media.getAllSessions().forEach(session -> session.addListener(sessionListener));
 
             while (true) {
                 Thread.sleep(1000);

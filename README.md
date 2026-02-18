@@ -22,31 +22,31 @@ Access the operating systems "Media Remote"/Now Playing interface from Java/Kotl
 
 ## Operating system support
 
-| Feature                                             | Linux | Windows | macOS   |
-|-----------------------------------------------------|-------|---------|---------|
-| Session discovery (all sessions)                    | Yes   | Yes     | No      |
-| Control/Query multiple sessions at once             | Yes   | Yes     | No      |
-| Active session selection                            | Yes   | Yes     | Yes     |
-| Session lookup by app name                          | Yes   | Yes     | Partial |
-| Playback state read                                 | Yes   | Yes     | Yes     |
-| Now playing: name/album/artist/duration             | Yes   | Yes     | Yes     |
-| Now playing: artwork                                | Yes   | No      | No      |
-| Now playing: livestream detection                   |       |         | Yes     |
-| Now playing: additional metadata                    | Yes   | Yes     | No      |
-| Now playing: position                               | Yes   | Yes     | Yes     |
-| Now playing: computed position progression          | Yes   | Yes     | Yes     |
-| Playback controls: play/pause/toggle/next/prev/stop | Yes   | Yes     | Yes     |
-| Playback controls: seek                             | No    | Yes     | Yes     |
-| Polling: supported                                  | Yes   | Yes     | Yes     |
-| Event driven: supported                             | Yes   | Yes     | Yes     |
-| Event driven: process system events                 | No    | No      | No      |
-| Polling: computed position progression              | Yes   | Yes     | Yes     |
-| Event driven: computed position progression         | Yes   | Yes     | Yes     |
-| Event driven: `onPlaybackStateChanged`              | Yes   | Yes     | Yes     |
-| Event driven: `onSessionAdded/Removed`              | Yes   | Yes     | No      |
-| Event driven: `onNowPlayingChanged`                 | Yes   | Yes     | Yes     |
-| Event driven: `onSessionActiveChanged`              | No    | Yes     | Yes     |
-| Configurable poll/update intervals                  | Yes   | Yes     | Yes     |
+| Feature                                             | Linux    | Windows  | macOS    |
+|-----------------------------------------------------|----------|----------|----------|
+| Session discovery (all sessions)                    | Yes      | Yes      | No       |
+| Control/Query multiple sessions at once             | Yes      | Yes      | No       |
+| Active session selection                            | Yes      | Yes      | Yes      |
+| Session lookup by app name                          | Yes      | Yes      | Partial  |
+| Playback state read                                 | Yes      | Yes      | Yes      |
+| Now playing: name/album/artist/duration             | Yes      | Yes      | Yes      |
+| Now playing: artwork                                | Yes      | Yes      | Yes      |
+| Now playing: livestream detection                   | Untested | Untested | Untested |
+| Now playing: additional metadata                    | Yes      | Yes      | No       |
+| Now playing: position                               | Yes      | Yes      | Yes      |
+| Now playing: computed position progression          | Yes      | Yes      | Yes      |
+| Playback controls: play/pause/toggle/next/prev/stop | Yes      | Yes      | Yes      |
+| Playback controls: seek                             | Yes      | Yes      | Yes      |
+| Polling: supported                                  | Yes      | Yes      | Yes      |
+| Event driven: supported                             | Yes      | Yes      | Yes      |
+| Event driven: process system events                 | No       | No       | No       |
+| Polling: computed position progression              | Yes      | Yes      | Yes      |
+| Event driven: computed position progression         | Yes      | Yes      | Yes      |
+| Event driven: `onPlaybackStateChanged`              | Yes      | Yes      | Yes      |
+| Event driven: `onSessionAdded/Removed`              | Yes      | Yes      | No       |
+| Event driven: `onNowPlayingChanged`                 | Yes      | Yes      | Yes      |
+| Event driven: `onSessionActiveChanged`              | Yes      | Yes      | Yes      |
+| Configurable poll/update intervals                  | Yes      | Yes      | Yes      |
 
 | Platform | Supported architecture | Native backend               |
 |----------|------------------------|------------------------------|

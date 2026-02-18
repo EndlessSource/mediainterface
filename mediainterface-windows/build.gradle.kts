@@ -66,6 +66,13 @@ val copyWindowsDlls = tasks.register("copyWindowsDlls") {
     dependsOn(copyWindowsDllX64, copyWindowsDllArm64)
 }
 
+tasks.register<Delete>("cmakeClean") {
+    delete(
+        layout.buildDirectory.dir("native/windows-x64"),
+        layout.buildDirectory.dir("native/windows-arm64")
+    )
+}
+
 tasks.named("processResources") {
     if (isWindows) {
         dependsOn(copyWindowsDlls)

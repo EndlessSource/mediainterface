@@ -4,7 +4,6 @@ import org.endlesssource.mediainterface.api.*;
 import org.freedesktop.dbus.connections.impl.DBusConnection;
 import org.freedesktop.dbus.exceptions.DBusException;
 import org.freedesktop.dbus.interfaces.Properties;
-import org.freedesktop.dbus.types.Variant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,6 +21,8 @@ import java.util.function.Function;
 
 class LinuxMediaSession implements MediaSession {
     private static final Logger logger = LoggerFactory.getLogger(LinuxMediaSession.class);
+    private static final long POSITION_CORRECTION_TOLERANCE_MS = 1500L;
+    private static final double RATE_EPSILON = 0.0001d;
 
     private final DBusConnection connection;
     private final String busName;
@@ -37,10 +38,11 @@ class LinuxMediaSession implements MediaSession {
 
     private NowPlaying lastNowPlaying;
     private PlaybackState lastState = PlaybackState.UNKNOWN;
-    private String lastTrackKey;
-    private Optional<Duration> lastRawPosition = Optional.empty();
-    private Optional<Duration> lastVirtualPosition = Optional.empty();
-    private long lastPositionSampleMs = System.currentTimeMillis();
+    private String anchorTrackKey;
+    private Optional<Duration> anchorPosition = Optional.empty();
+    private long anchorMonotonicNanos = System.nanoTime();
+    private PlaybackState anchorState = PlaybackState.UNKNOWN;
+    private double anchorRate = 1.0d;
 
     public LinuxMediaSession(DBusConnection connection,
                              String busName,
@@ -67,7 +69,7 @@ class LinuxMediaSession implements MediaSession {
             Optional<Map<String, Object>> metadataMap = MprisMetadataUtils.toMetadataMap(metadata);
             return metadataMap
                     .map(map -> new LinuxNowPlaying(map, player, properties))
-                    .map(this::withVirtualizedPositionIfNeeded);
+                    .map(this::withAnchoredPosition);
         } catch (Exception e) {
             return Optional.empty();
         }
@@ -163,7 +165,7 @@ class LinuxMediaSession implements MediaSession {
                 NowPlaying current = currentNowPlaying.get();
                 if (lastNowPlaying == null
                         || !sameMedia(lastNowPlaying, current)
-                        || !samePositionBucket(lastNowPlaying, current)) {
+                        || !sameEventPosition(lastNowPlaying, current, currentState)) {
                     lastNowPlaying = current;
                     listeners.forEach(listener -> listener.onNowPlayingChanged(this, Optional.of(current)));
                 }
@@ -184,47 +186,116 @@ class LinuxMediaSession implements MediaSession {
         }
     }
 
-    private NowPlaying withVirtualizedPositionIfNeeded(LinuxNowPlaying nowPlaying) {
-        long nowMs = System.currentTimeMillis();
-        String trackKey = trackKey(nowPlaying);
-        boolean trackChanged = !Objects.equals(trackKey, lastTrackKey);
-
+    private NowPlaying withAnchoredPosition(LinuxNowPlaying nowPlaying) {
+        long nowMonotonicNanos = System.nanoTime();
         PlaybackState state = controls.getPlaybackState();
         Optional<Duration> rawPosition = nowPlaying.getPosition();
-        Optional<Duration> virtualPosition = rawPosition;
+        double rate = readPlaybackRate().orElse(1.0d);
+        String trackKey = trackKey(nowPlaying);
+        boolean trackChanged = !Objects.equals(trackKey, anchorTrackKey);
+
+        Optional<Duration> predictedBefore = projectedAnchorPosition(nowMonotonicNanos);
 
         if (trackChanged) {
-            lastTrackKey = trackKey;
-        } else if (state == PlaybackState.PLAYING) {
+            anchorTrackKey = trackKey;
             if (rawPosition.isPresent()) {
-                if (lastRawPosition.isPresent() && lastVirtualPosition.isPresent()
-                        && rawPosition.get().equals(lastRawPosition.get())) {
-                    long elapsedMs = Math.max(0L, nowMs - lastPositionSampleMs);
-                    virtualPosition = Optional.of(lastVirtualPosition.get().plusMillis(elapsedMs));
-                }
-            } else if (lastVirtualPosition.isPresent()) {
-                long elapsedMs = Math.max(0L, nowMs - lastPositionSampleMs);
-                virtualPosition = Optional.of(lastVirtualPosition.get().plusMillis(elapsedMs));
+                anchorPosition = rawPosition;
+            } else {
+                anchorPosition = Optional.empty();
             }
-        } else if (rawPosition.isEmpty() && lastVirtualPosition.isPresent()) {
-            // Keep last known position stable while paused/stopped when source omits position.
-            virtualPosition = lastVirtualPosition;
+            anchorMonotonicNanos = nowMonotonicNanos;
+            anchorState = state;
+            anchorRate = rate;
+        } else if (rawPosition.isPresent()) {
+            boolean shouldAnchorToRaw = shouldAnchorToRaw(rawPosition.get(), predictedBefore, state, rate);
+            if (shouldAnchorToRaw) {
+                anchorPosition = rawPosition;
+                anchorMonotonicNanos = nowMonotonicNanos;
+            }
+            anchorState = state;
+            anchorRate = rate;
+        } else if (state != anchorState || Math.abs(rate - anchorRate) > RATE_EPSILON) {
+            anchorPosition = predictedBefore;
+            anchorMonotonicNanos = nowMonotonicNanos;
+            anchorState = state;
+            anchorRate = rate;
+        }
+
+        Optional<Duration> computedPosition = projectedAnchorPosition(nowMonotonicNanos);
+        if (computedPosition.isEmpty()) {
+            computedPosition = rawPosition;
         }
 
         Optional<Duration> duration = nowPlaying.getDuration();
-        if (virtualPosition.isPresent() && duration.isPresent()
-                && virtualPosition.get().compareTo(duration.get()) > 0) {
-            virtualPosition = duration;
+        if (computedPosition.isPresent() && duration.isPresent()
+                && computedPosition.get().compareTo(duration.get()) > 0) {
+            computedPosition = duration;
         }
 
-        lastRawPosition = rawPosition;
-        lastVirtualPosition = virtualPosition;
-        lastPositionSampleMs = nowMs;
-
-        if (Objects.equals(virtualPosition, rawPosition)) {
+        if (Objects.equals(computedPosition, rawPosition)) {
             return nowPlaying;
         }
-        return new PositionedNowPlaying(nowPlaying, virtualPosition, Instant.ofEpochMilli(nowMs));
+        return new PositionedNowPlaying(nowPlaying, computedPosition, Instant.now());
+    }
+
+    private boolean shouldAnchorToRaw(Duration rawPosition,
+                                      Optional<Duration> predictedBefore,
+                                      PlaybackState state,
+                                      double rate) {
+        if (anchorPosition.isEmpty()) {
+            return true;
+        }
+        if (state != anchorState || Math.abs(rate - anchorRate) > RATE_EPSILON) {
+            return true;
+        }
+        if (predictedBefore.isEmpty()) {
+            return true;
+        }
+
+        long diffMillis = Math.abs(rawPosition.minus(predictedBefore.get()).toMillis());
+        if (diffMillis > POSITION_CORRECTION_TOLERANCE_MS) {
+            return true;
+        }
+
+        // Avoid backward jitter from coarse/stale Position values while playing.
+        return !isBackward(rawPosition, predictedBefore.get(), state);
+    }
+
+    private static boolean isBackward(Duration rawPosition, Duration predictedPosition, PlaybackState state) {
+        return state == PlaybackState.PLAYING && rawPosition.compareTo(predictedPosition) < 0;
+    }
+
+    private Optional<Duration> projectedAnchorPosition(long nowMonotonicNanos) {
+        if (anchorPosition.isEmpty()) {
+            return Optional.empty();
+        }
+        if (anchorState != PlaybackState.PLAYING || anchorRate <= 0.0d) {
+            return anchorPosition;
+        }
+
+        long elapsedNanos = Math.max(0L, nowMonotonicNanos - anchorMonotonicNanos);
+        long deltaNanos = Math.max(0L, Math.round(elapsedNanos * anchorRate));
+        return Optional.of(anchorPosition.get().plusNanos(deltaNanos));
+    }
+
+    private Optional<Double> readPlaybackRate() {
+        try {
+            return Optional.of(player.getRate());
+        } catch (Exception e) {
+            logger.debug("Failed to get playback rate via direct method for {}: {}", busName, e.getMessage());
+        }
+
+        try {
+            Object rateObj = properties.Get("org.mpris.MediaPlayer2.Player", "Rate");
+            Object unwrapped = MprisMetadataUtils.unwrap(rateObj);
+            if (unwrapped instanceof Number number) {
+                return Optional.of(number.doubleValue());
+            }
+        } catch (Exception e) {
+            logger.debug("Failed to get playback rate via properties for {}: {}", busName, e.getMessage());
+        }
+
+        return Optional.empty();
     }
 
     private static String trackKey(NowPlaying nowPlaying) {
@@ -242,7 +313,12 @@ class LinuxMediaSession implements MediaSession {
                a.getDuration().equals(b.getDuration());
     }
 
-    private static boolean samePositionBucket(NowPlaying a, NowPlaying b) {
+    private static boolean sameEventPosition(NowPlaying a, NowPlaying b, PlaybackState currentState) {
+        if (currentState == PlaybackState.PLAYING) {
+            long aMs = a.getPosition().map(Duration::toMillis).orElse(-1L);
+            long bMs = b.getPosition().map(Duration::toMillis).orElse(-1L);
+            return aMs == bMs;
+        }
         long aSec = a.getPosition().map(Duration::getSeconds).orElse(-1L);
         long bSec = b.getPosition().map(Duration::getSeconds).orElse(-1L);
         return aSec == bSec;

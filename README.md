@@ -34,14 +34,14 @@ Access the operating systems "Media Remote"/Now Playing interface from Java/Kotl
 | Now playing: livestream detection                   |       |         | Yes     |
 | Now playing: additional metadata                    | Yes   | Yes     | No      |
 | Now playing: position                               | Yes   | Yes     | Yes     |
-| Now playing: virtualized position progression       | Yes   | Yes     | Yes     |
+| Now playing: computed position progression          | Yes   | Yes     | Yes     |
 | Playback controls: play/pause/toggle/next/prev/stop | Yes   | Yes     | Yes     |
 | Playback controls: seek                             | No    | Yes     | Yes     |
 | Polling: supported                                  | Yes   | Yes     | Yes     |
 | Event driven: supported                             | Yes   | Yes     | Yes     |
 | Event driven: process system events                 | No    | No      | No      |
-| Polling: virtualized position progression           | Yes   | Yes     | Yes     |
-| Event driven: virtualized position progression      | Yes   | Yes     | Yes     |
+| Polling: computed position progression              | Yes   | Yes     | Yes     |
+| Event driven: computed position progression         | Yes   | Yes     | Yes     |
 | Event driven: `onPlaybackStateChanged`              | Yes   | Yes     | Yes     |
 | Event driven: `onSessionAdded/Removed`              | Yes   | Yes     | No      |
 | Event driven: `onNowPlayingChanged`                 | Yes   | Yes     | Yes     |

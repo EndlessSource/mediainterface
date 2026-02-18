@@ -13,6 +13,8 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class EventDrivenMediaExample {
     private static final Logger logger = LoggerFactory.getLogger(EventDrivenMediaExample.class);
@@ -32,19 +34,9 @@ public final class EventDrivenMediaExample {
 
         try (SystemMediaInterface media = SystemMediaFactory.createSystemInterface(options)) {
             logger.info("Event-driven example running (listener callbacks enabled). Press Ctrl+C to stop.");
+            Set<String> registeredSessionIds = ConcurrentHashMap.newKeySet();
 
-            media.addSessionListener(new MediaSessionListener() {
-                @Override
-                public void onSessionAdded(MediaSession session) {
-                    logger.info("Session added: {} ({})", session.getApplicationName(), session.getSessionId());
-                    session.addListener(this);
-                }
-
-                @Override
-                public void onSessionRemoved(String sessionId) {
-                    logger.info("Session removed: {}", sessionId);
-                }
-
+            MediaSessionListener sessionListener = new MediaSessionListener() {
                 @Override
                 public void onPlaybackStateChanged(MediaSession session, PlaybackState state) {
                     logger.info("State changed [{}]: {}", session.getApplicationName(), state);
@@ -63,20 +55,22 @@ public final class EventDrivenMediaExample {
                     logger.info("Now playing [{}]: {} - {} ({}/{})",
                             session.getApplicationName(), title, artist, position, duration);
                 }
+            };
+
+            media.addSessionListener(new MediaSessionListener() {
+                @Override
+                public void onSessionAdded(MediaSession session) {
+                    logger.info("Session added: {} ({})", session.getApplicationName(), session.getSessionId());
+                    registerSessionListener(session, sessionListener, registeredSessionIds);
+                }
+
+                @Override
+                public void onSessionRemoved(String sessionId) {
+                    logger.info("Session removed: {}", sessionId);
+                }
             });
 
-            media.getAllSessions().forEach(session -> session.addListener(new MediaSessionListener() {
-                @Override
-                public void onPlaybackStateChanged(MediaSession s, PlaybackState state) {
-                    logger.info("State changed [{}]: {}", s.getApplicationName(), state);
-                }
-
-                @Override
-                public void onNowPlayingChanged(MediaSession s, Optional<NowPlaying> nowPlaying) {
-                    String title = nowPlaying.flatMap(NowPlaying::getTitle).orElse("Unknown Title");
-                    logger.info("Initial listener [{}]: {}", s.getApplicationName(), title);
-                }
-            }));
+            media.getAllSessions().forEach(session -> registerSessionListener(session, sessionListener, registeredSessionIds));
 
             while (true) {
                 Thread.sleep(1000);
@@ -93,6 +87,31 @@ public final class EventDrivenMediaExample {
         long minutes = totalSeconds / 60;
         long seconds = totalSeconds % 60;
         return String.format("%d:%02d", minutes, seconds);
+    }
+
+    private static void registerSessionListener(MediaSession session,
+                                                MediaSessionListener listener,
+                                                Set<String> registeredSessionIds) {
+        if (!registeredSessionIds.add(session.getSessionId())) {
+            return;
+        }
+        session.addListener(listener);
+
+        PlaybackState initialState = session.getControls().getPlaybackState();
+        logger.info("Session available: {} ({}) state={}",
+                session.getApplicationName(), session.getSessionId(), initialState);
+
+        Optional<NowPlaying> nowPlaying = session.getNowPlaying();
+        String title = nowPlaying.flatMap(NowPlaying::getTitle).orElse("Unknown Title");
+        String artist = nowPlaying.flatMap(NowPlaying::getArtist).orElse("Unknown Artist");
+        String position = nowPlaying.flatMap(NowPlaying::getPosition)
+                .map(EventDrivenMediaExample::formatDuration)
+                .orElse("--:--");
+        String duration = nowPlaying.flatMap(NowPlaying::getDuration)
+                .map(EventDrivenMediaExample::formatDuration)
+                .orElse("--:--");
+        logger.info("Initial now playing [{}|{}]: {} - {} ({}/{})",
+                session.getApplicationName(), session.getSessionId(), title, artist, position, duration);
     }
 
     private EventDrivenMediaExample() {

@@ -62,7 +62,9 @@ class LinuxMediaSession implements MediaSession {
         this.executor = Executors.newSingleThreadScheduledExecutor();
         this.applicationName = resolveApplicationName();
 
-        // Start background refresh for cached snapshots.
+        // Warm cache immediately so first reads/listener registration see current state.
+        checkForChanges();
+        // Continue background refresh for cached snapshots.
         startMonitoring();
     }
 

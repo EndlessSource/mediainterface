@@ -38,7 +38,9 @@ final class MacOsPerlMediaSession implements MediaSession {
         this.eventDrivenEnabled = eventDrivenEnabled;
         this.updateIntervalMs = updateInterval.toMillis();
         this.executor = Executors.newSingleThreadScheduledExecutor();
-        executor.scheduleWithFixedDelay(this::checkForChanges, 0L, updateIntervalMs, TimeUnit.MILLISECONDS);
+        // Warm cache immediately so first reads/listener registration see current state.
+        checkForChanges();
+        executor.scheduleWithFixedDelay(this::checkForChanges, updateIntervalMs, updateIntervalMs, TimeUnit.MILLISECONDS);
     }
 
     @Override

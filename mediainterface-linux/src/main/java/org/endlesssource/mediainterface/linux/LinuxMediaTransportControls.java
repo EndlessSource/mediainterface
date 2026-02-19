@@ -20,7 +20,7 @@ class LinuxMediaTransportControls implements MediaTransportControls {
     private final MprisPlayer player;
     private final Properties properties;
     private TransportCapabilities capabilities;
-    private PlaybackState cachedState = PlaybackState.UNKNOWN;
+    private volatile PlaybackState cachedState = PlaybackState.UNKNOWN;
 
     public LinuxMediaTransportControls(MprisPlayer player, Properties properties) {
         this.player = player;
@@ -113,7 +113,10 @@ class LinuxMediaTransportControls implements MediaTransportControls {
 
     @Override
     public PlaybackState getPlaybackState() {
-        // Always try to get a fresh state, don't rely on cached value being accurate
+        return cachedState;
+    }
+
+    PlaybackState refreshPlaybackState() {
         PlaybackState currentState = PlaybackState.UNKNOWN;
 
         // Try a direct method first (more reliable)
@@ -121,8 +124,7 @@ class LinuxMediaTransportControls implements MediaTransportControls {
             String status = player.getPlaybackStatus();
             if (status != null) {
                 currentState = parsePlaybackStatus(status);
-                cachedState = currentState;
-                return currentState;
+                return cacheAndReturn(currentState);
             }
         } catch (Exception e) {
             logger.debug("Failed to get playback state via direct method: {}", e.getMessage());
@@ -143,8 +145,7 @@ class LinuxMediaTransportControls implements MediaTransportControls {
 
             if (status != null) {
                 currentState = parsePlaybackStatus(status);
-                cachedState = currentState;
-                return currentState;
+                return cacheAndReturn(currentState);
             }
         } catch (Exception e) {
             logger.debug("Failed to get playback state via properties: {}", e.getMessage());
@@ -153,6 +154,11 @@ class LinuxMediaTransportControls implements MediaTransportControls {
         // For some MPRIS implementations (like Firefox), we might not be able to get playback state
         // In such cases, we'll rely on the active state check in the session
         return cachedState != null ? cachedState : PlaybackState.UNKNOWN;
+    }
+
+    private PlaybackState cacheAndReturn(PlaybackState state) {
+        cachedState = state == null ? PlaybackState.UNKNOWN : state;
+        return cachedState;
     }
 
     @Override
@@ -244,4 +250,3 @@ class LinuxMediaTransportControls implements MediaTransportControls {
         return Optional.empty();
     }
 }
-

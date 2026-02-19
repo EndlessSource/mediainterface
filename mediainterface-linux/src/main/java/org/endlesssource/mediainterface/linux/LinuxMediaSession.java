@@ -35,6 +35,9 @@ class LinuxMediaSession implements MediaSession {
     private final boolean eventDrivenEnabled;
     private final long updateIntervalMs;
     private volatile boolean closed;
+    private volatile Optional<NowPlaying> cachedNowPlaying = Optional.empty();
+    private volatile boolean cachedActive;
+    private final String applicationName;
 
     private NowPlaying lastNowPlaying;
     private PlaybackState lastState = PlaybackState.UNKNOWN;
@@ -56,23 +59,16 @@ class LinuxMediaSession implements MediaSession {
         this.controls = new LinuxMediaTransportControls(player, properties);
         this.eventDrivenEnabled = eventDrivenEnabled;
         this.updateIntervalMs = updateInterval.toMillis();
-        this.executor = eventDrivenEnabled ? Executors.newSingleThreadScheduledExecutor() : null;
+        this.executor = Executors.newSingleThreadScheduledExecutor();
+        this.applicationName = resolveApplicationName();
 
-        // Start monitoring for changes
+        // Start background refresh for cached snapshots.
         startMonitoring();
     }
 
     @Override
-    public synchronized Optional<NowPlaying> getNowPlaying() {
-        try {
-            Object metadata = properties.Get("org.mpris.MediaPlayer2.Player", "Metadata");
-            Optional<Map<String, Object>> metadataMap = MprisMetadataUtils.toMetadataMap(metadata);
-            return metadataMap
-                    .map(map -> new LinuxNowPlaying(map, player, properties))
-                    .map(this::withAnchoredPosition);
-        } catch (Exception e) {
-            return Optional.empty();
-        }
+    public Optional<NowPlaying> getNowPlaying() {
+        return cachedNowPlaying;
     }
 
     @Override
@@ -82,12 +78,7 @@ class LinuxMediaSession implements MediaSession {
 
     @Override
     public String getApplicationName() {
-        try {
-            String identity = mediaPlayer2.getIdentity();
-            return identity != null ? identity : extractAppNameFromBusName();
-        } catch (Exception e) {
-            return extractAppNameFromBusName();
-        }
+        return applicationName;
     }
 
     private String extractAppNameFromBusName() {
@@ -111,21 +102,7 @@ class LinuxMediaSession implements MediaSession {
 
     @Override
     public boolean isActive() {
-        PlaybackState state = controls.getPlaybackState();
-        if (state == PlaybackState.PLAYING) {
-            return true;
-        }
-
-        // For implementations that don't provide playback state (like Firefox),
-        // consider it active if there's metadata available
-        if (state == PlaybackState.UNKNOWN) {
-            Optional<NowPlaying> nowPlaying = getNowPlaying();
-            return nowPlaying.isPresent() &&
-                   nowPlaying.get().getTitle().isPresent() &&
-                   !nowPlaying.get().getTitle().get().isEmpty();
-        }
-
-        return false;
+        return cachedActive;
     }
 
     @Override
@@ -139,11 +116,7 @@ class LinuxMediaSession implements MediaSession {
     }
 
     private void startMonitoring() {
-        // Check for changes every 0.5 seconds
-        if (!eventDrivenEnabled) {
-            return;
-        }
-        executor.scheduleWithFixedDelay(this::checkForChanges, updateIntervalMs, updateIntervalMs, TimeUnit.MILLISECONDS);
+        executor.scheduleWithFixedDelay(this::checkForChanges, 0L, updateIntervalMs, TimeUnit.MILLISECONDS);
     }
 
     private void checkForChanges() {
@@ -152,26 +125,30 @@ class LinuxMediaSession implements MediaSession {
         }
 
         try {
-            // Check playback state changes
-            PlaybackState currentState = controls.getPlaybackState();
-            if (currentState != lastState) {
-                lastState = currentState;
-                listeners.forEach(listener -> listener.onPlaybackStateChanged(this, currentState));
-            }
+            PlaybackState currentState = controls.refreshPlaybackState();
+            Optional<NowPlaying> currentNowPlaying = queryNowPlaying(currentState);
 
-            // Check now playing changes
-            Optional<NowPlaying> currentNowPlaying = getNowPlaying();
-            if (currentNowPlaying.isPresent()) {
-                NowPlaying current = currentNowPlaying.get();
-                if (lastNowPlaying == null
-                        || !sameMedia(lastNowPlaying, current)
-                        || !sameEventPosition(lastNowPlaying, current, currentState)) {
-                    lastNowPlaying = current;
-                    listeners.forEach(listener -> listener.onNowPlayingChanged(this, Optional.of(current)));
+            cachedNowPlaying = currentNowPlaying;
+            cachedActive = computeActive(currentState, currentNowPlaying);
+
+            if (eventDrivenEnabled) {
+                if (currentState != lastState) {
+                    lastState = currentState;
+                    listeners.forEach(listener -> listener.onPlaybackStateChanged(this, currentState));
                 }
-            } else if (lastNowPlaying != null) {
-                lastNowPlaying = null;
-                listeners.forEach(listener -> listener.onNowPlayingChanged(this, Optional.empty()));
+
+                if (currentNowPlaying.isPresent()) {
+                    NowPlaying current = currentNowPlaying.get();
+                    if (lastNowPlaying == null
+                            || !sameMedia(lastNowPlaying, current)
+                            || !sameEventPosition(lastNowPlaying, current, currentState)) {
+                        lastNowPlaying = current;
+                        listeners.forEach(listener -> listener.onNowPlayingChanged(this, Optional.of(current)));
+                    }
+                } else if (lastNowPlaying != null) {
+                    lastNowPlaying = null;
+                    listeners.forEach(listener -> listener.onNowPlayingChanged(this, Optional.empty()));
+                }
             }
         } catch (Exception e) {
             logger.debug("Error checking for changes in {}: {}", getApplicationName(), e.getMessage());
@@ -181,14 +158,23 @@ class LinuxMediaSession implements MediaSession {
     public void close() {
         closed = true;
         listeners.clear();
-        if (executor != null) {
-            executor.shutdownNow();
+        executor.shutdownNow();
+    }
+
+    private Optional<NowPlaying> queryNowPlaying(PlaybackState currentState) {
+        try {
+            Object metadata = properties.Get("org.mpris.MediaPlayer2.Player", "Metadata");
+            Optional<Map<String, Object>> metadataMap = MprisMetadataUtils.toMetadataMap(metadata);
+            return metadataMap
+                    .map(map -> new LinuxNowPlaying(map, player, properties))
+                    .map(nowPlaying -> withAnchoredPosition(nowPlaying, currentState));
+        } catch (Exception e) {
+            return Optional.empty();
         }
     }
 
-    private NowPlaying withAnchoredPosition(LinuxNowPlaying nowPlaying) {
+    private NowPlaying withAnchoredPosition(LinuxNowPlaying nowPlaying, PlaybackState state) {
         long nowMonotonicNanos = System.nanoTime();
-        PlaybackState state = controls.getPlaybackState();
         Optional<Duration> rawPosition = nowPlaying.getPosition();
         double rate = readPlaybackRate().orElse(1.0d);
         String trackKey = trackKey(nowPlaying);
@@ -296,6 +282,28 @@ class LinuxMediaSession implements MediaSession {
         }
 
         return Optional.empty();
+    }
+
+    private boolean computeActive(PlaybackState state, Optional<NowPlaying> nowPlaying) {
+        if (state == PlaybackState.PLAYING) {
+            return true;
+        }
+        if (state == PlaybackState.UNKNOWN) {
+            return nowPlaying
+                    .flatMap(NowPlaying::getTitle)
+                    .map(title -> !title.isEmpty())
+                    .orElse(false);
+        }
+        return false;
+    }
+
+    private String resolveApplicationName() {
+        try {
+            String identity = mediaPlayer2.getIdentity();
+            return identity != null ? identity : extractAppNameFromBusName();
+        } catch (Exception e) {
+            return extractAppNameFromBusName();
+        }
     }
 
     private static String trackKey(NowPlaying nowPlaying) {

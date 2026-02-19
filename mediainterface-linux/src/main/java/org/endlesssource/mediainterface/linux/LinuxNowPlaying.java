@@ -18,12 +18,14 @@ class LinuxNowPlaying implements NowPlaying {
     private final Instant lastUpdated;
     private final MprisPlayer player;
     private final Properties properties;
+    private final Optional<Long> cachedPositionMicros;
 
     public LinuxNowPlaying(Map<String, Object> metadata) {
         this.metadata = new HashMap<>(metadata);
         this.lastUpdated = Instant.now();
         this.player = null; // Legacy constructor
         this.properties = null;
+        this.cachedPositionMicros = Optional.empty();
     }
 
     public LinuxNowPlaying(Map<String, Object> metadata, MprisPlayer player) {
@@ -31,6 +33,7 @@ class LinuxNowPlaying implements NowPlaying {
         this.lastUpdated = Instant.now();
         this.player = player;
         this.properties = null;
+        this.cachedPositionMicros = readPositionMicros();
     }
 
     public LinuxNowPlaying(Map<String, Object> metadata, MprisPlayer player, Properties properties) {
@@ -38,6 +41,7 @@ class LinuxNowPlaying implements NowPlaying {
         this.lastUpdated = Instant.now();
         this.player = player;
         this.properties = properties;
+        this.cachedPositionMicros = readPositionMicros();
     }
 
     @Override
@@ -86,9 +90,8 @@ class LinuxNowPlaying implements NowPlaying {
 
     @Override
     public Optional<Duration> getPosition() {
-        Optional<Long> positionMicros = readPositionMicros();
-        if (positionMicros.isPresent()) {
-            return Optional.of(Duration.ofNanos(positionMicros.get() * 1000));
+        if (cachedPositionMicros.isPresent()) {
+            return Optional.of(Duration.ofNanos(cachedPositionMicros.get() * 1000));
         }
         return Optional.empty();
     }
@@ -245,4 +248,3 @@ class LinuxNowPlaying implements NowPlaying {
         return Objects.hash(getTitle(), getArtist(), getAlbum());
     }
 }
-

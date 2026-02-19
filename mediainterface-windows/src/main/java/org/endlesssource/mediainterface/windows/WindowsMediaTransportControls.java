@@ -14,6 +14,8 @@ final class WindowsMediaTransportControls implements MediaTransportControls {
             new TransportCapabilities(true, true, true, true, true, true);
 
     private final String sessionId;
+    private volatile PlaybackState cachedPlaybackState = PlaybackState.UNKNOWN;
+    private volatile TransportCapabilities cachedCapabilities = DEFAULT_CAPABILITIES;
 
     WindowsMediaTransportControls(String sessionId) {
         this.sessionId = sessionId;
@@ -74,22 +76,33 @@ final class WindowsMediaTransportControls implements MediaTransportControls {
 
     @Override
     public PlaybackState getPlaybackState() {
+        return cachedPlaybackState;
+    }
+
+    PlaybackState refreshPlaybackState() {
         int code = WinRtBridge.nativeGetPlaybackState(sessionId);
-        return switch (code) {
+        cachedPlaybackState = switch (code) {
             case 0 -> PlaybackState.PLAYING;
             case 1 -> PlaybackState.PAUSED;
             case 2 -> PlaybackState.STOPPED;
             default -> PlaybackState.UNKNOWN;
         };
+        return cachedPlaybackState;
     }
 
     @Override
     public TransportCapabilities getCapabilities() {
+        return cachedCapabilities;
+    }
+
+    TransportCapabilities refreshCapabilities() {
         boolean[] caps = WinRtBridge.nativeGetCapabilities(sessionId);
         if (caps == null || caps.length < 6) {
             logger.debug("Falling back to default capabilities for session {}", sessionId);
-            return DEFAULT_CAPABILITIES;
+            cachedCapabilities = DEFAULT_CAPABILITIES;
+            return cachedCapabilities;
         }
-        return new TransportCapabilities(caps[0], caps[1], caps[2], caps[3], caps[4], caps[5]);
+        cachedCapabilities = new TransportCapabilities(caps[0], caps[1], caps[2], caps[3], caps[4], caps[5]);
+        return cachedCapabilities;
     }
 }

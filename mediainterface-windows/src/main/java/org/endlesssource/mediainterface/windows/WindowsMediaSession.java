@@ -28,6 +28,9 @@ final class WindowsMediaSession implements MediaSession {
     private final List<MediaSessionListener> listeners = new CopyOnWriteArrayList<>();
     private final ScheduledExecutorService executor;
     private volatile boolean closed;
+    private volatile Optional<NowPlaying> cachedNowPlaying = Optional.empty();
+    private volatile boolean cachedActive;
+    private volatile String cachedAppName;
 
     private volatile PlaybackState lastPlaybackState = PlaybackState.UNKNOWN;
     private volatile Snapshot lastSnapshot;
@@ -38,14 +41,17 @@ final class WindowsMediaSession implements MediaSession {
         this.eventDrivenEnabled = eventDrivenEnabled;
         this.updateIntervalMs = Objects.requireNonNull(updateInterval, "updateInterval").toMillis();
         this.controls = new WindowsMediaTransportControls(sessionId);
-        this.executor = eventDrivenEnabled ? Executors.newSingleThreadScheduledExecutor() : null;
-        if (eventDrivenEnabled) {
-            executor.scheduleWithFixedDelay(this::checkForChanges, updateIntervalMs, updateIntervalMs, TimeUnit.MILLISECONDS);
-        }
+        this.executor = Executors.newSingleThreadScheduledExecutor();
+        this.cachedAppName = sessionId;
+        executor.scheduleWithFixedDelay(this::checkForChanges, 0L, updateIntervalMs, TimeUnit.MILLISECONDS);
     }
 
     @Override
-    public synchronized Optional<NowPlaying> getNowPlaying() {
+    public Optional<NowPlaying> getNowPlaying() {
+        return cachedNowPlaying;
+    }
+
+    private Optional<NowPlaying> queryNowPlayingFromNative() {
         String[] payload = WinRtBridge.nativeGetNowPlaying(sessionId);
         if (payload == null || payload.length == 0) {
             return Optional.empty();
@@ -64,11 +70,7 @@ final class WindowsMediaSession implements MediaSession {
 
     @Override
     public String getApplicationName() {
-        String appName = WinRtBridge.nativeGetSessionAppName(sessionId);
-        if (appName == null || appName.isBlank()) {
-            return sessionId;
-        }
-        return appName;
+        return cachedAppName;
     }
 
     @Override
@@ -78,7 +80,7 @@ final class WindowsMediaSession implements MediaSession {
 
     @Override
     public boolean isActive() {
-        return WinRtBridge.nativeIsSessionActive(sessionId);
+        return cachedActive;
     }
 
     @Override
@@ -94,34 +96,45 @@ final class WindowsMediaSession implements MediaSession {
     void close() {
         closed = true;
         listeners.clear();
-        if (executor != null) {
-            executor.shutdownNow();
-        }
+        executor.shutdownNow();
     }
 
     private void checkForChanges() {
-        if (closed || !eventDrivenEnabled) {
+        if (closed) {
             return;
         }
         try {
-            PlaybackState currentState = controls.getPlaybackState();
-            if (currentState != lastPlaybackState) {
-                lastPlaybackState = currentState;
-                listeners.forEach(listener -> listener.onPlaybackStateChanged(this, currentState));
+            PlaybackState currentState = controls.refreshPlaybackState();
+            controls.refreshCapabilities();
+
+            String appName = WinRtBridge.nativeGetSessionAppName(sessionId);
+            if (appName != null && !appName.isBlank()) {
+                cachedAppName = appName;
             }
 
-            boolean active = isActive();
-            if (lastActive == null || active != lastActive) {
-                lastActive = active;
-                listeners.forEach(listener -> listener.onSessionActiveChanged(this, active));
-            }
+            boolean active = WinRtBridge.nativeIsSessionActive(sessionId);
+            cachedActive = active;
 
-            Optional<NowPlaying> currentNowPlaying = getNowPlaying();
+            Optional<NowPlaying> currentNowPlaying = queryNowPlayingFromNative();
+            cachedNowPlaying = currentNowPlaying;
             Snapshot snapshot = currentNowPlaying.map(Snapshot::fromNowPlaying).orElseGet(() -> Snapshot.fromPayload(null));
-            boolean includePositionChanges = currentState == PlaybackState.PLAYING;
-            if (!snapshot.sameMedia(lastSnapshot, includePositionChanges)) {
-                lastSnapshot = snapshot;
-                listeners.forEach(listener -> listener.onNowPlayingChanged(this, currentNowPlaying));
+
+            if (eventDrivenEnabled) {
+                if (currentState != lastPlaybackState) {
+                    lastPlaybackState = currentState;
+                    listeners.forEach(listener -> listener.onPlaybackStateChanged(this, currentState));
+                }
+
+                if (lastActive == null || active != lastActive) {
+                    lastActive = active;
+                    listeners.forEach(listener -> listener.onSessionActiveChanged(this, active));
+                }
+
+                boolean includePositionChanges = currentState == PlaybackState.PLAYING;
+                if (!snapshot.sameMedia(lastSnapshot, includePositionChanges)) {
+                    lastSnapshot = snapshot;
+                    listeners.forEach(listener -> listener.onNowPlayingChanged(this, currentNowPlaying));
+                }
             }
         } catch (Exception e) {
             logger.debug("Error checking session changes for {}: {}", sessionId, e.getMessage());

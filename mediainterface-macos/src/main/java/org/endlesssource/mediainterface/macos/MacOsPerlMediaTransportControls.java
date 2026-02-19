@@ -11,6 +11,7 @@ final class MacOsPerlMediaTransportControls implements MediaTransportControls {
             new TransportCapabilities(true, true, true, true, true, true);
 
     private final MacOsPerlAdapter adapter;
+    private volatile PlaybackState cachedPlaybackState = PlaybackState.UNKNOWN;
 
     MacOsPerlMediaTransportControls(MacOsPerlAdapter adapter) {
         this.adapter = adapter;
@@ -53,16 +54,15 @@ final class MacOsPerlMediaTransportControls implements MediaTransportControls {
 
     @Override
     public PlaybackState getPlaybackState() {
-        MacOsPerlAdapter.Snapshot s = adapter.get();
-        return switch (s.playingRaw()) {
-            case "1" -> PlaybackState.PLAYING;
-            case "0" -> PlaybackState.PAUSED;
-            default -> PlaybackState.UNKNOWN;
-        };
+        return cachedPlaybackState;
     }
 
     @Override
     public TransportCapabilities getCapabilities() {
         return CAPS;
+    }
+
+    void updatePlaybackState(PlaybackState state) {
+        cachedPlaybackState = state == null ? PlaybackState.UNKNOWN : state;
     }
 }

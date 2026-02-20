@@ -84,6 +84,19 @@ dependencies {
 </dependency>
 ```
 
+### IMPORTANT FOR shadowJar USERS
+
+If you use `shadowJar`, add this to your Gradle configuration to merge the included service file:
+
+```kotlin
+tasks.shadowJar {
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE // include all service files
+    mergeServiceFiles { // always merge service files
+        include("META-INF/services/org.endlesssource.mediainterface.spi.PlatformMediaProvider")
+    }
+}
+```
+
 
 ### Minimal usage
 

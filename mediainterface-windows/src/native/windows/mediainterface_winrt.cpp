@@ -1,4 +1,5 @@
 #include <jni.h>
+#include <winerror.h>
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -8,8 +9,10 @@
 
 #include <algorithm>
 #include <optional>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -20,6 +23,10 @@ using namespace Windows::Security::Cryptography;
 
 namespace {
     bool g_eventDriven = true;
+    std::mutex g_initMutex;
+    int g_initRefCount = 0;
+    bool g_apartmentInitializedByBridge = false;
+    std::thread::id g_apartmentInitThread;
 
     std::string to_utf8(jstring value, JNIEnv* env) {
         if (value == nullptr) {
@@ -64,17 +71,64 @@ namespace {
         }
         return array;
     }
+
+    void throw_illegal_state(JNIEnv* env, const std::string& message) {
+        if (env == nullptr || env->ExceptionCheck()) {
+            return;
+        }
+        jclass exClass = env->FindClass("java/lang/IllegalStateException");
+        if (exClass != nullptr) {
+            env->ThrowNew(exClass, message.c_str());
+        }
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativeInit(JNIEnv*, jclass, jboolean eventDriven) {
+Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativeInit(JNIEnv* env, jclass, jboolean eventDriven) {
     g_eventDriven = (eventDriven == JNI_TRUE);
-    init_apartment(apartment_type::multi_threaded);
+    std::lock_guard<std::mutex> lock(g_initMutex);
+    if (g_initRefCount > 0) {
+        ++g_initRefCount;
+        return;
+    }
+    try {
+        init_apartment(apartment_type::multi_threaded);
+        g_apartmentInitializedByBridge = true;
+        g_apartmentInitThread = std::this_thread::get_id();
+        g_initRefCount = 1;
+    } catch (const hresult_error& e) {
+        if (e.code() == hresult(RPC_E_CHANGED_MODE)) {
+            // The host already initialized COM on this thread (often STA). Reuse it.
+            g_apartmentInitializedByBridge = false;
+            g_apartmentInitThread = std::thread::id{};
+            g_initRefCount = 1;
+            return;
+        }
+        std::ostringstream message;
+        message << "Failed to initialize WinRT apartment (HRESULT 0x"
+                << std::hex << static_cast<uint32_t>(e.code().value)
+                << ")";
+        throw_illegal_state(env, message.str());
+    } catch (...) {
+        throw_illegal_state(env, "Failed to initialize WinRT apartment");
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativeShutdown(JNIEnv*, jclass) {
-    uninit_apartment();
+    std::lock_guard<std::mutex> lock(g_initMutex);
+    if (g_initRefCount == 0) {
+        return;
+    }
+    --g_initRefCount;
+    if (g_initRefCount > 0) {
+        return;
+    }
+    if (g_apartmentInitializedByBridge && g_apartmentInitThread == std::this_thread::get_id()) {
+        uninit_apartment();
+    }
+    g_apartmentInitializedByBridge = false;
+    g_apartmentInitThread = std::thread::id{};
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

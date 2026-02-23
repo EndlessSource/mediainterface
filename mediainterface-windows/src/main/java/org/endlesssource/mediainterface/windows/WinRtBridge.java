@@ -10,6 +10,8 @@ import org.slf4j.LoggerFactory;
 
 final class WinRtBridge {
     private static final Logger logger = LoggerFactory.getLogger(WinRtBridge.class);
+    private static final boolean nativeTraceEnabled =
+            Boolean.parseBoolean(System.getProperty("mediainterface.windows.nativeTrace", "false"));
     private static volatile boolean loaded;
 
     static synchronized void load() {
@@ -105,6 +107,13 @@ final class WinRtBridge {
     static native boolean nativeStop(String sessionId);
 
     static native boolean nativeSeek(String sessionId, long positionMillis);
+
+    static void traceFromNative(String message) {
+        if (!nativeTraceEnabled) {
+            return;
+        }
+        logger.info("[native] {}", message == null ? "<null>" : message);
+    }
 
     private WinRtBridge() {
     }

@@ -12,7 +12,10 @@ endif()
 set(JAVA_HOME $ENV{JAVA_HOME})
 
 add_library(mediainterface_winrt SHARED
-    mediainterface_winrt.cpp
+    bridge_shared.cpp
+    bridge_init.cpp
+    bridge_query.cpp
+    bridge_controls.cpp
 )
 
 target_compile_features(mediainterface_winrt PRIVATE cxx_std_20)

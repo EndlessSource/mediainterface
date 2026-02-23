@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 
 final class WindowsMediaSession implements MediaSession {
     private static final Logger logger = LoggerFactory.getLogger(WindowsMediaSession.class);
+    private static final long POSITION_EVENT_TICK_MS = 200L;
 
     private final String sessionId;
     private final boolean eventDrivenEnabled;
@@ -35,6 +36,8 @@ final class WindowsMediaSession implements MediaSession {
     private volatile PlaybackState lastPlaybackState = PlaybackState.UNKNOWN;
     private volatile Snapshot lastSnapshot;
     private volatile Boolean lastActive;
+    private volatile double lastPlaybackRate = 1.0d;
+    private volatile long lastSnapshotMonotonicNanos = System.nanoTime();
 
     WindowsMediaSession(String sessionId, boolean eventDrivenEnabled, Duration updateInterval) {
         this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
@@ -46,6 +49,10 @@ final class WindowsMediaSession implements MediaSession {
         // Warm cache immediately so first reads/listener registration see current state.
         checkForChanges();
         executor.scheduleWithFixedDelay(this::checkForChanges, updateIntervalMs, updateIntervalMs, TimeUnit.MILLISECONDS);
+        if (eventDrivenEnabled) {
+            executor.scheduleWithFixedDelay(this::emitProjectedPositionChanges,
+                    POSITION_EVENT_TICK_MS, POSITION_EVENT_TICK_MS, TimeUnit.MILLISECONDS);
+        }
     }
 
     @Override
@@ -120,6 +127,8 @@ final class WindowsMediaSession implements MediaSession {
             Optional<NowPlaying> currentNowPlaying = queryNowPlayingFromNative();
             cachedNowPlaying = currentNowPlaying;
             Snapshot snapshot = currentNowPlaying.map(Snapshot::fromNowPlaying).orElseGet(() -> Snapshot.fromPayload(null));
+            lastPlaybackRate = snapshot.playbackRate();
+            lastSnapshotMonotonicNanos = System.nanoTime();
 
             if (eventDrivenEnabled) {
                 if (currentState != lastPlaybackState) {
@@ -141,6 +150,27 @@ final class WindowsMediaSession implements MediaSession {
         } catch (Exception e) {
             logger.debug("Error checking session changes for {}: {}", sessionId, e.getMessage());
         }
+    }
+
+    private void emitProjectedPositionChanges() {
+        if (closed || !eventDrivenEnabled || lastPlaybackState != PlaybackState.PLAYING) {
+            return;
+        }
+        Snapshot base = lastSnapshot;
+        if (base == null || base.positionMs().isEmpty()) {
+            return;
+        }
+
+        long nowNanos = System.nanoTime();
+        Snapshot projected = base.projectedTo(nowNanos, lastSnapshotMonotonicNanos, lastPlaybackRate);
+        if (projected.sameMedia(base, true)) {
+            return;
+        }
+
+        lastSnapshot = projected;
+        lastSnapshotMonotonicNanos = nowNanos;
+        cachedNowPlaying = Optional.of(projected.toNowPlaying());
+        listeners.forEach(listener -> listener.onNowPlayingChanged(this, cachedNowPlaying));
     }
 
     private record Snapshot(Optional<String> title,
@@ -201,6 +231,51 @@ final class WindowsMediaSession implements MediaSession {
                     && samePosition
                     && live == other.live
                     && normalizedMetadata.equals(otherNormalizedMetadata);
+        }
+
+        double playbackRate() {
+            if (metadataPairs == null || metadataPairs.isBlank()) {
+                return 1.0d;
+            }
+            for (String line : metadataPairs.split("\\R")) {
+                if (line == null || line.isBlank() || !line.startsWith("playbackRate=")) {
+                    continue;
+                }
+                String value = line.substring("playbackRate=".length()).trim();
+                if (value.isEmpty() || "null".equalsIgnoreCase(value)) {
+                    return 1.0d;
+                }
+                try {
+                    return Double.parseDouble(value);
+                } catch (NumberFormatException ignored) {
+                    return 1.0d;
+                }
+            }
+            return 1.0d;
+        }
+
+        Snapshot projectedTo(long nowMonotonicNanos, long anchorMonotonicNanos, double playbackRate) {
+            if (positionMs.isEmpty()) {
+                return this;
+            }
+            if (playbackRate <= 0.0d) {
+                return this;
+            }
+            long elapsedNanos = Math.max(0L, nowMonotonicNanos - anchorMonotonicNanos);
+            long deltaMs = Math.max(0L, Math.round((elapsedNanos / 1_000_000.0d) * playbackRate));
+            if (deltaMs <= 0L) {
+                return this;
+            }
+
+            long current = positionMs.get();
+            long next = current + deltaMs;
+            if (durationMs.isPresent()) {
+                next = Math.min(next, durationMs.get());
+            }
+            if (next == current) {
+                return this;
+            }
+            return new Snapshot(title, artist, album, artwork, durationMs, Optional.of(next), live, metadataPairs);
         }
 
         WindowsNowPlaying toNowPlaying() {

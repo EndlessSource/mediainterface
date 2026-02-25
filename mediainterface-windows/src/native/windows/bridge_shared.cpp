@@ -1,6 +1,8 @@
 #include "bridge_shared.h"
 
+#include <chrono>
 #include <sstream>
+#include <thread>
 #include <unordered_set>
 
 bool g_eventDriven = true;
@@ -124,10 +126,41 @@ int64_t millis_to_ticks(int64_t millis) {
     return millis * 10000;
 }
 
+std::optional<GlobalSystemMediaTransportControlsSessionManager> request_manager_safe(JNIEnv* env) {
+    // On the first launch after a reboot, the SMTC service RPC endpoint may not
+    // be fully initialised yet. RequestAsync().get() can throw a native access
+    // violation (0xC0000005) from inside WinRT's COM proxy — not an HRESULT —
+    // which flies through normal catch blocks. /EHa makes catch(...) intercept
+    // SEH faults so we can retry until the service is ready.
+    constexpr int kMaxAttempts = 3;
+    constexpr auto kRetryDelay = std::chrono::milliseconds(750);
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        if (attempt > 0) {
+            trace_native(env, std::string("request_manager_safe: retry attempt=") + std::to_string(attempt));
+            std::this_thread::sleep_for(kRetryDelay);
+        }
+        try {
+            auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+            return manager;
+        } catch (const hresult_error& e) {
+            trace_hresult(env, "request_manager_safe", e);
+        } catch (...) {
+            // Catches SEH (0xC0000005) when compiled with /EHa.
+            trace_native(env, std::string("request_manager_safe: caught SEH/unknown attempt=") + std::to_string(attempt));
+        }
+    }
+    trace_native(env, "request_manager_safe: all attempts failed, returning nullopt");
+    return std::nullopt;
+}
+
 std::optional<GlobalSystemMediaTransportControlsSession> find_session(const std::string& sessionId, JNIEnv* env) {
     trace_native(env, std::string("find_session request id=") + sessionId);
-    auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
-    for (auto const& session : manager.GetSessions()) {
+    auto manager = request_manager_safe(env);
+    if (!manager.has_value()) {
+        trace_native(env, "find_session: manager unavailable");
+        return std::nullopt;
+    }
+    for (auto const& session : manager.value().GetSessions()) {
         if (to_string(session.SourceAppUserModelId()) == sessionId) {
             trace_native(env, std::string("find_session hit id=") + sessionId);
             return session;

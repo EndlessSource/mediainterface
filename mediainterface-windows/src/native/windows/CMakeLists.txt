@@ -21,6 +21,12 @@ add_library(mediainterface_winrt SHARED
 target_compile_features(mediainterface_winrt PRIVATE cxx_std_20)
 target_compile_definitions(mediainterface_winrt PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 
+# /EHa: asynchronous (SEH) exception handling so catch(...) intercepts
+# access violations from WinRT's RPC layer during cold-boot service init.
+if (MSVC)
+    target_compile_options(mediainterface_winrt PRIVATE /EHa)
+endif()
+
 target_include_directories(mediainterface_winrt PRIVATE
     "${JAVA_HOME}/include"
     "${JAVA_HOME}/include/win32"

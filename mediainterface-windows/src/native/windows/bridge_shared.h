@@ -39,4 +39,6 @@ void trace_native(JNIEnv* env, const std::string& message);
 void trace_hresult(JNIEnv* env, const char* context, const hresult_error& e);
 int64_t ticks_to_millis(int64_t ticks);
 int64_t millis_to_ticks(int64_t millis);
+// Wraps RequestAsync().get() with retry and SEH-safe catch for cold-boot AVs.
+std::optional<GlobalSystemMediaTransportControlsSessionManager> request_manager_safe(JNIEnv* env);
 std::optional<GlobalSystemMediaTransportControlsSession> find_session(const std::string& sessionId, JNIEnv* env = nullptr);

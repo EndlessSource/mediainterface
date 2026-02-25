@@ -10,10 +10,14 @@ Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativeGetSessionIds(JN
     trace_native(env, "nativeGetSessionIds enter");
     try {
         trace_native(env, "nativeGetSessionIds requesting manager");
-        auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+        auto manager = request_manager_safe(env);
+        if (!manager.has_value()) {
+            trace_native(env, "nativeGetSessionIds manager unavailable");
+            return new_string_array(env, {});
+        }
         std::vector<std::string> ids;
         std::unordered_set<std::string> seen;
-        for (auto const& session : manager.GetSessions()) {
+        for (auto const& session : manager.value().GetSessions()) {
             std::string id = to_string(session.SourceAppUserModelId());
             if (id.empty()) {
                 continue;

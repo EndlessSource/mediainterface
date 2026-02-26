@@ -1,6 +1,3 @@
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
-
 #include "bridge_shared.h"
 
 // ---------------------------------------------------------------------------
@@ -39,8 +36,9 @@ static void do_request(RequestCtx* ctx) {
 // Worker thread: no local C++ dtors in scope, so __try/__except is valid.
 static DWORD WINAPI request_thread(LPVOID param) noexcept {
     auto* ctx = static_cast<RequestCtx*>(param);
-    // Join the process MTA so WinRT objects are accessible on this thread.
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    // No explicit CoInitializeEx needed: once the process MTA is initialised
+    // (by nativeInit), threads that call WinRT without their own apartment
+    // implicitly join the MTA.
     __try {
         do_request(ctx);
     } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION
@@ -48,7 +46,6 @@ static DWORD WINAPI request_thread(LPVOID param) noexcept {
                     : EXCEPTION_CONTINUE_SEARCH) {
         // ctx->success remains false
     }
-    CoUninitialize();
     SetEvent(ctx->done_event);
     return 0;
 }

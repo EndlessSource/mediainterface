@@ -1,4 +1,5 @@
 #include "bridge_shared.h"
+#include <Windows.h>
 
 // ---------------------------------------------------------------------------
 // Dedicated Win32 thread for the cold-boot RequestAsync() call.

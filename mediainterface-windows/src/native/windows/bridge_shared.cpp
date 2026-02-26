@@ -1,5 +1,6 @@
 #include "bridge_shared.h"
 
+#include <atomic>
 #include <chrono>
 #include <sstream>
 #include <thread>
@@ -126,12 +127,22 @@ int64_t millis_to_ticks(int64_t millis) {
     return millis * 10000;
 }
 
+// Set to true after the first successful RequestAsync() call. Once warm,
+// the factory stays accessible and we skip the thread-based slow path.
+static std::atomic<bool> g_factory_warm{false};
+
 std::optional<GlobalSystemMediaTransportControlsSessionManager> request_manager_safe(JNIEnv* env) {
-    // On the first launch after a reboot, the SMTC service RPC endpoint may not
-    // be fully initialised yet. RequestAsync().get() can throw a native access
-    // violation (0xC0000005) from inside WinRT's COM proxy — not an HRESULT —
-    // which flies through normal catch blocks. /EHa makes catch(...) intercept
-    // SEH faults so we can retry until the service is ready.
+    // Fast path: factory already warmed up, call directly.
+    if (g_factory_warm.load(std::memory_order_acquire)) {
+        try {
+            return GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    // Cold path: run RequestAsync() on a dedicated Win32 thread so that
+    // __try/__except can catch the cold-boot AV without JVM frames interfering.
     constexpr int kMaxAttempts = 3;
     constexpr auto kRetryDelay = std::chrono::milliseconds(750);
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
@@ -139,15 +150,14 @@ std::optional<GlobalSystemMediaTransportControlsSessionManager> request_manager_
             trace_native(env, std::string("request_manager_safe: retry attempt=") + std::to_string(attempt));
             std::this_thread::sleep_for(kRetryDelay);
         }
-        try {
-            auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+        trace_native(env, std::string("request_manager_safe: cold attempt=") + std::to_string(attempt));
+        GlobalSystemMediaTransportControlsSessionManager manager{nullptr};
+        if (smtc_try_request_manager(&manager, env)) {
+            g_factory_warm.store(true, std::memory_order_release);
+            trace_native(env, "request_manager_safe: factory warmed, success");
             return manager;
-        } catch (const hresult_error& e) {
-            trace_hresult(env, "request_manager_safe", e);
-        } catch (...) {
-            // Catches SEH (0xC0000005) when compiled with /EHa.
-            trace_native(env, std::string("request_manager_safe: caught SEH/unknown attempt=") + std::to_string(attempt));
         }
+        trace_native(env, std::string("request_manager_safe: failed attempt=") + std::to_string(attempt));
     }
     trace_native(env, "request_manager_safe: all attempts failed, returning nullopt");
     return std::nullopt;

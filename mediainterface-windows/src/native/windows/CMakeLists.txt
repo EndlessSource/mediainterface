@@ -13,6 +13,7 @@ set(JAVA_HOME $ENV{JAVA_HOME})
 
 add_library(mediainterface_winrt SHARED
     bridge_shared.cpp
+    bridge_seh.cpp
     bridge_init.cpp
     bridge_query.cpp
     bridge_controls.cpp
@@ -23,7 +24,10 @@ target_compile_definitions(mediainterface_winrt PRIVATE WIN32_LEAN_AND_MEAN NOMI
 
 # /EHa: asynchronous (SEH) exception handling so catch(...) intercepts
 # access violations from WinRT's RPC layer during cold-boot service init.
+# CMake injects /EHsc into CMAKE_CXX_FLAGS by default; strip it first so it
+# cannot override /EHa regardless of flag ordering on the command line.
 if (MSVC)
+    string(REPLACE "/EHsc" "/EHa" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
     target_compile_options(mediainterface_winrt PRIVATE /EHa)
 endif()
 

@@ -39,8 +39,10 @@ void trace_native(JNIEnv* env, const std::string& message);
 void trace_hresult(JNIEnv* env, const char* context, const hresult_error& e);
 int64_t ticks_to_millis(int64_t ticks);
 int64_t millis_to_ticks(int64_t millis);
-// Calls RequestAsync().get() on a dedicated Win32 thread with __try/__except.
-// Returns true and fills *out on success, false if an AV or timeout occurs.
+// Calls RequestAsync().get() on a dedicated Win32 thread with two-layer
+// exception defence (C++ try/catch + SEH __try/__except).
+// Returns true and fills *out on success, false on any exception or timeout.
+// Heap-allocates context with refcount so a timeout cannot use-after-free.
 bool smtc_try_request_manager(GlobalSystemMediaTransportControlsSessionManager* out, JNIEnv* env) noexcept;
 
 // Wraps smtc_try_request_manager with up to 3 retries for cold-boot AVs.

@@ -103,6 +103,19 @@ nmcpAggregation {
     }
 }
 
+val isTagRelease = System.getenv("GITHUB_REF_TYPE")?.equals("tag", ignoreCase = true) == true
+
+tasks.register("publishAll") {
+    group = "publishing"
+    description = "Publish to all configured repositories. Add new destinations here."
+
+    // Maven Central: snapshots on main, releases on tags
+    dependsOn(if (isTagRelease) "publishAggregationToCentralPortal" else "publishAggregationToCentralSnapshots")
+
+    // To publish to additional repos, add more dependsOn() calls here, e.g.:
+    // dependsOn("publishAllPublicationsToMyOtherRepoRepository")
+}
+
 dependencies {
     selectedPublishModules.forEach { modulePath ->
         add("nmcpAggregation", project(modulePath))

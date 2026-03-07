@@ -17,7 +17,7 @@ final class MacOsPerlSystemMediaInterface implements SystemMediaInterface {
     MacOsPerlSystemMediaInterface(SystemMediaOptions options) {
         this.options = options;
         MacOsPerlAdapter adapter = new MacOsPerlAdapter();
-        this.session = new MacOsPerlMediaSession(adapter, options.isEventDrivenEnabled(), options.getSessionUpdateInterval());
+        this.session = new MacOsPerlMediaSession(adapter, options.isEventDrivenEnabled(), options.getSessionUpdateInterval(), options.isPositionUpdatesEnabled());
     }
 
     @Override

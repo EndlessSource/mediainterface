@@ -33,6 +33,7 @@ class LinuxMediaSession implements MediaSession {
     private final List<MediaSessionListener> listeners = new CopyOnWriteArrayList<>();
     private final ScheduledExecutorService executor;
     private final boolean eventDrivenEnabled;
+    private final boolean positionUpdatesEnabled;
     private final long updateIntervalMs;
     private volatile boolean closed;
     private volatile Optional<NowPlaying> cachedNowPlaying = Optional.empty();
@@ -50,7 +51,8 @@ class LinuxMediaSession implements MediaSession {
     public LinuxMediaSession(DBusConnection connection,
                              String busName,
                              boolean eventDrivenEnabled,
-                             java.time.Duration updateInterval) throws DBusException {
+                             java.time.Duration updateInterval,
+                             boolean positionUpdatesEnabled) throws DBusException {
         this.connection = connection;
         this.busName = busName;
         this.mediaPlayer2 = connection.getRemoteObject(busName, "/org/mpris/MediaPlayer2", MprisMediaPlayer2.class);
@@ -58,6 +60,7 @@ class LinuxMediaSession implements MediaSession {
         this.properties = connection.getRemoteObject(busName, "/org/mpris/MediaPlayer2", Properties.class);
         this.controls = new LinuxMediaTransportControls(player, properties);
         this.eventDrivenEnabled = eventDrivenEnabled;
+        this.positionUpdatesEnabled = positionUpdatesEnabled;
         this.updateIntervalMs = updateInterval.toMillis();
         this.executor = Executors.newSingleThreadScheduledExecutor();
         this.applicationName = resolveApplicationName();
@@ -169,7 +172,9 @@ class LinuxMediaSession implements MediaSession {
             Optional<Map<String, Object>> metadataMap = MprisMetadataUtils.toMetadataMap(metadata);
             return metadataMap
                     .map(map -> new LinuxNowPlaying(map, player, properties))
-                    .map(nowPlaying -> withAnchoredPosition(nowPlaying, currentState));
+                    .map(nowPlaying -> positionUpdatesEnabled
+                            ? withAnchoredPosition(nowPlaying, currentState)
+                            : new PositionedNowPlaying(nowPlaying, Optional.empty(), Instant.now()));
         } catch (Exception e) {
             return Optional.empty();
         }

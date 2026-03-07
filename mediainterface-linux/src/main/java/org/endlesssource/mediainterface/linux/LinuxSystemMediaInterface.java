@@ -119,7 +119,8 @@ public class LinuxSystemMediaInterface implements SystemMediaInterface {
                     connection,
                     busName,
                     options.isEventDrivenEnabled(),
-                    options.getSessionUpdateInterval()
+                    options.getSessionUpdateInterval(),
+                    options.isPositionUpdatesEnabled()
             );
             sessions.put(busName, session);
 

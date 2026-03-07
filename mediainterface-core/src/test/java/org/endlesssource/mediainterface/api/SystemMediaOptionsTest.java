@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -16,6 +17,18 @@ class SystemMediaOptionsTest {
         assertTrue(defaults.isEventDrivenEnabled());
         assertEquals(SystemMediaOptions.DEFAULT_SESSION_POLL_INTERVAL, defaults.getSessionPollInterval());
         assertEquals(SystemMediaOptions.DEFAULT_SESSION_UPDATE_INTERVAL, defaults.getSessionUpdateInterval());
+        assertTrue(defaults.isPositionUpdatesEnabled());
+    }
+
+    @Test
+    void withPositionUpdatesEnabled_togglesCorrectly() {
+        SystemMediaOptions defaults = SystemMediaOptions.defaults();
+        SystemMediaOptions disabled = defaults.withPositionUpdatesEnabled(false);
+        assertTrue(defaults.isPositionUpdatesEnabled());
+        assertFalse(disabled.isPositionUpdatesEnabled());
+        assertEquals(defaults.isEventDrivenEnabled(), disabled.isEventDrivenEnabled());
+        assertEquals(defaults.getSessionPollInterval(), disabled.getSessionPollInterval());
+        assertEquals(defaults.getSessionUpdateInterval(), disabled.getSessionUpdateInterval());
     }
 
     @Test

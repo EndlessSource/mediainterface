@@ -24,6 +24,7 @@ final class WindowsMediaSession implements MediaSession {
 
     private final String sessionId;
     private final boolean eventDrivenEnabled;
+    private final boolean positionUpdatesEnabled;
     private final long updateIntervalMs;
     private final WindowsMediaTransportControls controls;
     private final List<MediaSessionListener> listeners = new CopyOnWriteArrayList<>();
@@ -39,9 +40,10 @@ final class WindowsMediaSession implements MediaSession {
     private volatile double lastPlaybackRate = 1.0d;
     private volatile long lastSnapshotMonotonicNanos = System.nanoTime();
 
-    WindowsMediaSession(String sessionId, boolean eventDrivenEnabled, Duration updateInterval) {
+    WindowsMediaSession(String sessionId, boolean eventDrivenEnabled, Duration updateInterval, boolean positionUpdatesEnabled) {
         this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
         this.eventDrivenEnabled = eventDrivenEnabled;
+        this.positionUpdatesEnabled = positionUpdatesEnabled;
         this.updateIntervalMs = Objects.requireNonNull(updateInterval, "updateInterval").toMillis();
         this.controls = new WindowsMediaTransportControls(sessionId);
         this.executor = Executors.newSingleThreadScheduledExecutor();
@@ -64,6 +66,9 @@ final class WindowsMediaSession implements MediaSession {
         String[] payload = WinRtBridge.nativeGetNowPlaying(sessionId);
         if (payload == null || payload.length == 0) {
             return Optional.empty();
+        }
+        if (!positionUpdatesEnabled && payload.length > 5) {
+            payload[5] = null;
         }
         Snapshot snapshot = Snapshot.fromPayload(payload);
         if (snapshot.isEmpty()) {
@@ -153,7 +158,7 @@ final class WindowsMediaSession implements MediaSession {
     }
 
     private void emitProjectedPositionChanges() {
-        if (closed || !eventDrivenEnabled || lastPlaybackState != PlaybackState.PLAYING) {
+        if (closed || !eventDrivenEnabled || !positionUpdatesEnabled || lastPlaybackState != PlaybackState.PLAYING) {
             return;
         }
         Snapshot base = lastSnapshot;

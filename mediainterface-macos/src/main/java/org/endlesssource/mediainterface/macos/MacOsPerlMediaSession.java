@@ -21,6 +21,7 @@ final class MacOsPerlMediaSession implements MediaSession {
     private final MacOsPerlAdapter adapter;
     private final MacOsPerlMediaTransportControls controls;
     private final boolean eventDrivenEnabled;
+    private final boolean positionUpdatesEnabled;
     private final long updateIntervalMs;
     private final ScheduledExecutorService executor;
     private final List<MediaSessionListener> listeners = new CopyOnWriteArrayList<>();
@@ -32,10 +33,11 @@ final class MacOsPerlMediaSession implements MediaSession {
     private Snapshot lastSnapshot;
     private Boolean lastActive;
 
-    MacOsPerlMediaSession(MacOsPerlAdapter adapter, boolean eventDrivenEnabled, Duration updateInterval) {
+    MacOsPerlMediaSession(MacOsPerlAdapter adapter, boolean eventDrivenEnabled, Duration updateInterval, boolean positionUpdatesEnabled) {
         this.adapter = adapter;
         this.controls = new MacOsPerlMediaTransportControls(adapter);
         this.eventDrivenEnabled = eventDrivenEnabled;
+        this.positionUpdatesEnabled = positionUpdatesEnabled;
         this.updateIntervalMs = updateInterval.toMillis();
         this.executor = Executors.newSingleThreadScheduledExecutor();
         // Warm cache immediately so first reads/listener registration see current state.
@@ -131,7 +133,7 @@ final class MacOsPerlMediaSession implements MediaSession {
                 snapshot.album(),
                 snapshot.artwork(),
                 effectiveDurationMs == null ? null : String.valueOf(effectiveDurationMs),
-                snapshot.positionMs() == null ? null : String.valueOf(snapshot.positionMs()),
+                snapshot.positionMs() == null || !positionUpdatesEnabled ? null : String.valueOf(snapshot.positionMs()),
                 "false",
                 ""
         };

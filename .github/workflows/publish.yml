@@ -74,10 +74,10 @@ jobs:
 
       - name: Inject native resources
         run: |
-          mkdir -p mediainterface-windows/src/main/resources/native/windows
-          mkdir -p mediainterface-macos/src/main/resources/native/macos
-          cp -R .ci/native-artifacts/windows-native-resources/. mediainterface-windows/src/main/resources/native/windows/
-          cp -R .ci/native-artifacts/macos-native-resources/. mediainterface-macos/src/main/resources/native/macos/
+          mkdir -p mediainterface-windows/src/main/resources/native
+          mkdir -p mediainterface-macos/src/main/resources/native
+          cp -R .ci/native-artifacts/windows-native-resources/. mediainterface-windows/src/main/resources/native/
+          cp -R .ci/native-artifacts/macos-native-resources/. mediainterface-macos/src/main/resources/native/
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4

@@ -112,8 +112,8 @@ tasks.register("publishAll") {
     // Maven Central: snapshots on main, releases on tags
     dependsOn(if (isTagRelease) "publishAggregationToCentralPortal" else "publishAggregationToCentralSnapshots")
 
-    // To publish to additional repos, add more dependsOn() calls here, e.g.:
-    // dependsOn("publishAllPublicationsToMyOtherRepoRepository")
+    // Nexus: snapshots on main, releases on tags
+    dependsOn(selectedPublishModules.map { "$it:publishMavenJavaPublicationToNexusRepository" })
 }
 
 dependencies {
@@ -142,6 +142,25 @@ subprojects {
             if (!hasMavenJavaPublication && components.names.contains("java")) {
                 publications.create<MavenPublication>("mavenJava") {
                     from(components["java"])
+                }
+            }
+
+            val nexusUser = (rootProject.findProperty("nexus.user") as String?)
+                ?: System.getenv("NEXUS_USER")
+            val nexusPass = (rootProject.findProperty("nexus.pass") as String?)
+                ?: System.getenv("NEXUS_PASS")
+
+            repositories {
+                maven {
+                    name = "Nexus"
+                    url = if (version.toString().endsWith("-SNAPSHOT"))
+                        uri("https://nexus.endlesssource.org/repository/maven-snapshots/")
+                    else
+                        uri("https://nexus.endlesssource.org/repository/maven-releases/")
+                    credentials {
+                        username = nexusUser
+                        password = nexusPass
+                    }
                 }
             }
 

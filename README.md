@@ -1,6 +1,7 @@
 # Java Media Interface
 
 [![CI](https://github.com/endlesssource/mediainterface/actions/workflows/ci.yml/badge.svg)](https://github.com/endlesssource/mediainterface/actions/workflows/ci.yml)
+[![EndlessSource Nexus](https://img.shields.io/maven-metadata/v?metadataUrl=https://nexus.endlesssource.org/repository/maven-releases/org/endlesssource/mediainterface/all/maven-metadata.xml&label=EndlessSource)](https://nexus.endlesssource.org/repository/maven-releases/org/endlesssource/mediainterface/all/)
 [![Maven Central](https://img.shields.io/maven-central/v/org.endlesssource.mediainterface/all.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/org.endlesssource.mediainterface/all)
 [![Javadoc (core)](https://javadoc.io/badge2/org.endlesssource.mediainterface/core/javadoc.svg)](https://javadoc.io/doc/org.endlesssource.mediainterface/core)<br>
 ![Java](https://img.shields.io/badge/java-%23ED8B00.svg?logo=openjdk&logoColor=white)
@@ -20,45 +21,11 @@ Access the operating systems "Media Remote"/Now Playing interface from Java/Kotl
 - Seek support
 - Cross-platform universal interface (one API for all platforms)
 
-## Operating system support
-
-| Feature                                             | Linux    | Windows  | macOS    |
-|-----------------------------------------------------|----------|----------|----------|
-| Session discovery (all sessions)                    | Yes      | Yes      | No       |
-| Control/Query multiple sessions at once             | Yes      | Yes      | No       |
-| Active session selection                            | Yes      | Yes      | Yes      |
-| Session lookup by app name                          | Yes      | Yes      | Partial  |
-| Playback state read                                 | Yes      | Yes      | Yes      |
-| Now playing: name/album/artist/duration             | Yes      | Yes      | Yes      |
-| Now playing: artwork                                | Yes      | Yes      | Yes      |
-| Now playing: livestream detection                   | Untested | Untested | Untested |
-| Now playing: additional metadata                    | Yes      | Yes      | No       |
-| Now playing: position                               | Yes      | Yes      | Yes      |
-| Now playing: computed position progression          | Yes      | Yes      | Yes      |
-| Playback controls: play/pause/toggle/next/prev/stop | Yes      | Yes      | Yes      |
-| Playback controls: seek                             | Yes      | Yes      | Yes      |
-| Polling: supported                                  | Yes      | Yes      | Yes      |
-| Event driven: supported                             | Yes      | Yes      | Yes      |
-| Event driven: process system events                 | No       | No       | No       |
-| Polling: computed position progression              | Yes      | Yes      | Yes      |
-| Event driven: computed position progression         | Yes      | Yes      | Yes      |
-| Event driven: `onPlaybackStateChanged`              | Yes      | Yes      | Yes      |
-| Event driven: `onSessionAdded/Removed`              | Yes      | Yes      | No       |
-| Event driven: `onNowPlayingChanged`                 | Yes      | Yes      | Yes      |
-| Event driven: `onSessionActiveChanged`              | Yes      | Yes      | Yes      |
-| Configurable poll/update intervals                  | Yes      | Yes      | Yes      |
-
-| Platform | Supported architecture | Native backend               |
-|----------|------------------------|------------------------------|
-| Linux    | N/A                    | Java DBUS/MPRIS2             |
-| Windows  | x64, ARM64             | JNI (`mediainterface_winrt`) |
-| macOS    | Intel, Apple Silicon   | Perl + MediaRemoteAdapter    |
-
 ## Quickstart
 
 Use `mediainterface-all` to get the core API + all platform providers in one dependency.
 
-Replace VERSION_HERE with the Maven Central version shown in the badge above.
+Replace `VERSION_HERE` with the latest version shown in the badge above.
 
 Javadocs:
 - Core API: https://javadoc.io/doc/org.endlesssource.mediainterface/core
@@ -69,6 +36,10 @@ Javadocs:
 ### Gradle (Kotlin)
 
 ```kotlin
+repositories {
+    maven("https://nexus.endlesssource.org/repository/maven-releases/")
+}
+
 dependencies {
     implementation("org.endlesssource.mediainterface:all:VERSION_HERE")
 }
@@ -77,11 +48,59 @@ dependencies {
 ### Maven
 
 ```xml
+<repositories>
+  <repository>
+    <id>endlesssource</id>
+    <url>https://nexus.endlesssource.org/repository/maven-releases/</url>
+  </repository>
+</repositories>
+
 <dependency>
   <groupId>org.endlesssource.mediainterface</groupId>
   <artifactId>all</artifactId>
   <version>VERSION_HERE</version>
 </dependency>
+```
+
+### Maven Central 
+
+Also available on Maven Central (note that releases might be delayed):
+
+**Gradle (Kotlin):**
+```kotlin
+dependencies {
+    implementation("org.endlesssource.mediainterface:all:VERSION_HERE")
+}
+```
+
+**Maven:**
+```xml
+<dependency>
+  <groupId>org.endlesssource.mediainterface</groupId>
+  <artifactId>all</artifactId>
+  <version>VERSION_HERE</version>
+</dependency>
+```
+
+### Snapshots
+
+Snapshot builds are available from the EndlessSource Nexus snapshot repository:
+
+**Gradle (Kotlin):**
+```kotlin
+repositories {
+    maven("https://nexus.endlesssource.org/repository/maven-snapshots/")
+}
+```
+
+**Maven:**
+```xml
+<repositories>
+  <repository>
+    <id>endlesssource-snapshots</id>
+    <url>https://nexus.endlesssource.org/repository/maven-snapshots/</url>
+  </repository>
+</repositories>
 ```
 
 ### IMPORTANT FOR shadowJar USERS
@@ -123,6 +142,42 @@ public class Main {
 ### More examples
 
 See [`examples` module](https://github.com/EndlessSource/mediainterface/tree/main/examples/src/main/java/org/endlesssource/mediainterface/examples)
+
+## Platform support
+
+| Platform | Architecture         | Backend                      |
+|----------|----------------------|------------------------------|
+| Linux    | any                  | Java D-Bus / MPRIS2          |
+| Windows  | x64, ARM64           | JNI (`mediainterface_winrt`) |
+| macOS    | Intel, Apple Silicon | Perl + MediaRemoteAdapter    |
+
+<details>
+<summary>Feature matrix</summary>
+
+| Feature                                             | Linux    | Windows  | macOS    |
+|-----------------------------------------------------|----------|----------|----------|
+| Session discovery (all sessions)                    | Yes      | Yes      | No       |
+| Control/Query multiple sessions at once             | Yes      | Yes      | No       |
+| Active session selection                            | Yes      | Yes      | Yes      |
+| Session lookup by app name                          | Yes      | Yes      | Partial  |
+| Playback state                                      | Yes      | Yes      | Yes      |
+| Now playing: title/album/artist/duration            | Yes      | Yes      | Yes      |
+| Now playing: artwork                                | Yes      | Yes      | Yes      |
+| Now playing: additional metadata                    | Yes      | Yes      | No       |
+| Now playing: position                               | Yes      | Yes      | Yes      |
+| Now playing: computed position progression          | Yes      | Yes      | Yes      |
+| Now playing: livestream detection                   | Untested | Untested | Untested |
+| Playback controls: play/pause/toggle/next/prev/stop | Yes      | Yes      | Yes      |
+| Playback controls: seek                             | Yes      | Yes      | Yes      |
+| Polling                                             | Yes      | Yes      | Yes      |
+| Event-driven                                        | Yes      | Yes      | Yes      |
+| Event-driven: `onPlaybackStateChanged`              | Yes      | Yes      | Yes      |
+| Event-driven: `onNowPlayingChanged`                 | Yes      | Yes      | Yes      |
+| Event-driven: `onSessionActiveChanged`              | Yes      | Yes      | Yes      |
+| Event-driven: `onSessionAdded/Removed`              | Yes      | Yes      | No       |
+| Configurable poll/update intervals                  | Yes      | Yes      | Yes      |
+
+</details>
 
 ## License
 

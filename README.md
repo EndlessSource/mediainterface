@@ -37,7 +37,7 @@ Javadocs:
 
 ```kotlin
 repositories {
-    maven("https://nexus.endlesssource.org/repository/maven-releases/")
+    maven("https://maven.endlesssource.org/repository/maven-releases/")
 }
 
 dependencies {
@@ -51,7 +51,7 @@ dependencies {
 <repositories>
   <repository>
     <id>endlesssource</id>
-    <url>https://nexus.endlesssource.org/repository/maven-releases/</url>
+    <url>https://maven.endlesssource.org/repository/maven-releases/</url>
   </repository>
 </repositories>
 
@@ -89,7 +89,7 @@ Snapshot builds are available from the EndlessSource Nexus snapshot repository:
 **Gradle (Kotlin):**
 ```kotlin
 repositories {
-    maven("https://nexus.endlesssource.org/repository/maven-snapshots/")
+    maven("https://maven.endlesssource.org/repository/maven-snapshots/")
 }
 ```
 
@@ -98,7 +98,7 @@ repositories {
 <repositories>
   <repository>
     <id>endlesssource-snapshots</id>
-    <url>https://nexus.endlesssource.org/repository/maven-snapshots/</url>
+    <url>https://maven.endlesssource.org/repository/maven-snapshots/</url>
   </repository>
 </repositories>
 ```

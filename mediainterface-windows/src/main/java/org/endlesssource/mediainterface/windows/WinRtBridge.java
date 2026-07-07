@@ -14,6 +14,38 @@ final class WinRtBridge {
             Boolean.parseBoolean(System.getProperty("mediainterface.windows.nativeTrace", "false"));
     private static volatile boolean loaded;
 
+    /**
+     * Receiver for state pushed from WinRT events. The native side builds the
+     * full payload inside its change handlers and delivers it here, so the
+     * Java side never reads WinRT state back. Callbacks arrive on native
+     * (WinRT thread pool) threads and must not block; implementations should
+     * update in-memory caches and defer user listener callbacks to an
+     * executor.
+     */
+    interface NativeEventSink {
+        /** The current full set of session ids after a session-list change. */
+        void onSessionListChanged(String[] sessionIds);
+
+        /**
+         * A session's full state after one of its WinRT properties changed.
+         *
+         * @param payload same layout as {@link #nativeGetSessionSnapshot}
+         */
+        void onSessionStateChanged(String sessionId, String[] payload);
+    }
+
+    private static volatile NativeEventSink eventSink;
+
+    static void setEventSink(NativeEventSink sink) {
+        eventSink = sink;
+    }
+
+    static void clearEventSink(NativeEventSink sink) {
+        if (eventSink == sink) {
+            eventSink = null;
+        }
+    }
+
     static synchronized void load() {
         if (loaded) {
             return;
@@ -67,32 +99,30 @@ final class WinRtBridge {
 
     static native void nativeInit(boolean eventDriven);
 
+    /**
+     * Subscribes to WinRT change events and synchronously delivers the current
+     * session list and each session's state through the event sink before
+     * returning. All later updates arrive as pushes on WinRT threads.
+     *
+     * @return false when the WinRT session manager is unavailable; retry later
+     */
+    static native boolean nativeStartEventStream();
+
     static native void nativeShutdown();
 
     static native boolean nativeIsEventDrivenEnabled();
 
     static native String[] nativeGetSessionIds();
 
-    static native String nativeGetSessionAppName(String sessionId);
-
-    static native boolean nativeIsSessionActive(String sessionId);
-
     /**
-     * @return Playback state code: 0=PLAYING, 1=PAUSED, 2=STOPPED, 3=UNKNOWN.
+     * @return Combined snapshot payload:
+     * [appName, active, playbackStateCode, capabilities (six '0'/'1' chars:
+     * play,pause,next,prev,stop,seek), title, artist, album, artwork,
+     * durationMs, positionMs, isLive, metadataPairs] where metadataPairs is
+     * encoded as key=value lines. Playback state codes:
+     * 0=PLAYING, 1=PAUSED, 2=STOPPED, 3=UNKNOWN.
      */
-    static native int nativeGetPlaybackState(String sessionId);
-
-    /**
-     * @return [canPlay, canPause, canNext, canPrevious, canStop, canSeek].
-     */
-    static native boolean[] nativeGetCapabilities(String sessionId);
-
-    /**
-     * @return Array payload:
-     * [title, artist, album, artwork, durationMs, positionMs, isLive, metadataPairs]
-     * where metadataPairs is encoded as key=value lines.
-     */
-    static native String[] nativeGetNowPlaying(String sessionId);
+    static native String[] nativeGetSessionSnapshot(String sessionId);
 
     static native boolean nativePlay(String sessionId);
 
@@ -113,6 +143,38 @@ final class WinRtBridge {
             return;
         }
         logger.info("[native] {}", message == null ? "<null>" : message);
+    }
+
+    /**
+     * Called from native code with the full session-id list after the WinRT
+     * session list changed.
+     */
+    static void onNativeSessionList(String[] sessionIds) {
+        NativeEventSink sink = eventSink;
+        if (sink == null || sessionIds == null) {
+            return;
+        }
+        try {
+            sink.onSessionListChanged(sessionIds);
+        } catch (Throwable t) {
+            logger.debug("Session-list event sink failed: {}", t.getMessage());
+        }
+    }
+
+    /**
+     * Called from native code with a session's full state payload after one
+     * of its media/playback/timeline properties changed.
+     */
+    static void onNativeSessionState(String sessionId, String[] payload) {
+        NativeEventSink sink = eventSink;
+        if (sink == null || sessionId == null || payload == null) {
+            return;
+        }
+        try {
+            sink.onSessionStateChanged(sessionId, payload);
+        } catch (Throwable t) {
+            logger.debug("Session state event sink failed: {}", t.getMessage());
+        }
     }
 
     private WinRtBridge() {

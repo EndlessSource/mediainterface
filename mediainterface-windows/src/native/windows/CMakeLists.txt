@@ -11,6 +11,14 @@ endif()
 
 set(JAVA_HOME $ENV{JAVA_HOME})
 
+# Statically link the MSVC C++ runtime into the DLL (/MT) so end users don't
+# need a msvcp140/vcruntime140 that matches the CI build image; version skew
+# there caused reproducible access violations inside the dynamic runtime.
+# CMP0091 must be NEW (and set before add_library) so CMAKE_MSVC_RUNTIME_LIBRARY
+# is honoured instead of the legacy hardcoded /MD.
+cmake_policy(SET CMP0091 NEW)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded" CACHE STRING "" FORCE)
+
 add_library(mediainterface_winrt SHARED
     bridge_shared.cpp
     bridge_seh.cpp

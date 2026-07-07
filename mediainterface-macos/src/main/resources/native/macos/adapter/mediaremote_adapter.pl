@@ -61,6 +61,13 @@ if ($command eq "get") {
   exit 0;
 }
 
+if ($command eq "stream") {
+  fail("Too many arguments for stream") if defined shift @ARGV;
+  install_xsub($handle, "adapter_stream_env", "main::adapter_stream_env");
+  call_alias("main::adapter_stream_env");
+  exit 0;
+}
+
 if ($command eq "send") {
   my $id = shift @ARGV;
   fail("Missing command id for send") unless defined $id;

@@ -1,7 +1,6 @@
 package org.endlesssource.mediainterface.linux;
 
 import org.endlesssource.mediainterface.api.NowPlaying;
-import org.freedesktop.dbus.interfaces.Properties;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -13,35 +12,17 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
+/**
+ * Immutable view over an MPRIS metadata map. Holds no D-Bus references and
+ * performs no I/O; the playback position is supplied by the owning session.
+ */
 class LinuxNowPlaying implements NowPlaying {
     private final Map<String, Object> metadata;
     private final Instant lastUpdated;
-    private final MprisPlayer player;
-    private final Properties properties;
-    private final Optional<Long> cachedPositionMicros;
 
-    public LinuxNowPlaying(Map<String, Object> metadata) {
+    LinuxNowPlaying(Map<String, Object> metadata) {
         this.metadata = new HashMap<>(metadata);
         this.lastUpdated = Instant.now();
-        this.player = null; // Legacy constructor
-        this.properties = null;
-        this.cachedPositionMicros = Optional.empty();
-    }
-
-    public LinuxNowPlaying(Map<String, Object> metadata, MprisPlayer player) {
-        this.metadata = new HashMap<>(metadata);
-        this.lastUpdated = Instant.now();
-        this.player = player;
-        this.properties = null;
-        this.cachedPositionMicros = readPositionMicros();
-    }
-
-    public LinuxNowPlaying(Map<String, Object> metadata, MprisPlayer player, Properties properties) {
-        this.metadata = new HashMap<>(metadata);
-        this.lastUpdated = Instant.now();
-        this.player = player;
-        this.properties = properties;
-        this.cachedPositionMicros = readPositionMicros();
     }
 
     @Override
@@ -71,74 +52,22 @@ class LinuxNowPlaying implements NowPlaying {
     @Override
     public Optional<Duration> getDuration() {
         Optional<Long> lengthOpt = getLongValue("mpris:length");
-        if (lengthOpt.isPresent()) {
-            long micros = lengthOpt.get();
-            Duration duration = Duration.ofNanos(micros * 1000);
-            return Optional.of(duration);
+        if (lengthOpt.isEmpty()) {
+            // Alternative duration metadata key that some implementations use
+            lengthOpt = getLongValue("xesam:length");
         }
-
-        // Try alternative duration metadata keys that some implementations might use
-        Optional<Long> altLengthOpt = getLongValue("xesam:length");
-        if (altLengthOpt.isPresent()) {
-            long micros = altLengthOpt.get();
-            Duration duration = Duration.ofNanos(micros * 1000);
-            return Optional.of(duration);
-        }
-
-        return Optional.empty();
+        return lengthOpt.map(micros -> Duration.ofNanos(micros * 1000));
     }
 
     @Override
     public Optional<Duration> getPosition() {
-        if (cachedPositionMicros.isPresent()) {
-            return Optional.of(Duration.ofNanos(cachedPositionMicros.get() * 1000));
-        }
         return Optional.empty();
     }
 
-    private Optional<Long> readPositionMicros() {
-        if (properties != null) {
-            try {
-                Object positionObj = properties.Get("org.mpris.MediaPlayer2.Player", "Position");
-                Object unwrapped = MprisMetadataUtils.unwrap(positionObj);
-                Optional<Long> coerced = coerceToLong(unwrapped);
-                if (coerced.isPresent()) {
-                    return coerced;
-                }
-            } catch (Exception ignored) {
-                // Fallback to direct method
-            }
-        }
-
-        if (player != null) {
-            try {
-                return Optional.of(player.getPosition());
-            } catch (Exception ignored) {
-                // Position might not be available via direct call
-            }
-        }
-
-        return Optional.empty();
-    }
-
-    private Optional<Long> coerceToLong(Object value) {
-        if (value instanceof Number number) {
-            return Optional.of(number.longValue());
-        }
-        if (value instanceof String stringValue) {
-            try {
-                return Optional.of(Long.parseLong(stringValue));
-            } catch (NumberFormatException ignored) {
-                return Optional.empty();
-            }
-        }
-        if (value instanceof List<?> list && !list.isEmpty()) {
-            for (Object element : list) {
-                Optional<Long> coerced = coerceToLong(element);
-                if (coerced.isPresent()) {
-                    return coerced;
-                }
-            }
+    Optional<org.freedesktop.dbus.ObjectPath> getTrackId() {
+        Object value = MprisMetadataUtils.unwrap(metadata.get("mpris:trackid"));
+        if (value instanceof org.freedesktop.dbus.ObjectPath) {
+            return Optional.of((org.freedesktop.dbus.ObjectPath) value);
         }
         return Optional.empty();
     }
@@ -165,15 +94,14 @@ class LinuxNowPlaying implements NowPlaying {
     }
 
     private Optional<String> getStringValue(String key) {
-        Object value = metadata.get(key);
-        return coerceToString(value);
+        return coerceToString(metadata.get(key));
     }
 
     private Optional<List<String>> getStringList(String key) {
         Object value = metadata.get(key);
-        if (value instanceof List<?> list && !list.isEmpty()) {
+        if (value instanceof List<?> && !((List<?>) value).isEmpty()) {
             List<String> strings = new ArrayList<>();
-            for (Object element : list) {
+            for (Object element : (List<?>) value) {
                 coerceToString(element).ifPresent(strings::add);
             }
             if (!strings.isEmpty()) {
@@ -189,19 +117,22 @@ class LinuxNowPlaying implements NowPlaying {
     }
 
     private Optional<Long> getLongValue(String key) {
-        Object value = metadata.get(key);
-        if (value instanceof Number number) {
-            return Optional.of(number.longValue());
+        return coerceToLong(metadata.get(key));
+    }
+
+    private static Optional<Long> coerceToLong(Object value) {
+        if (value instanceof Number) {
+            return Optional.of(((Number) value).longValue());
         }
-        if (value instanceof String str) {
+        if (value instanceof String) {
             try {
-                return Optional.of(Long.parseLong(str));
+                return Optional.of(Long.parseLong((String) value));
             } catch (NumberFormatException ignored) {
-                // ignore
+                return Optional.empty();
             }
         }
-        if (value instanceof List<?> list && !list.isEmpty()) {
-            for (Object element : list) {
+        if (value instanceof List<?>) {
+            for (Object element : (List<?>) value) {
                 Optional<Long> coerced = coerceToLong(element);
                 if (coerced.isPresent()) {
                     return coerced;
@@ -211,18 +142,18 @@ class LinuxNowPlaying implements NowPlaying {
         return Optional.empty();
     }
 
-    private Optional<String> coerceToString(Object value) {
-        if (value instanceof CharSequence sequence && sequence.length() > 0) {
-            return Optional.of(sequence.toString());
+    private static Optional<String> coerceToString(Object value) {
+        if (value instanceof CharSequence && ((CharSequence) value).length() > 0) {
+            return Optional.of(value.toString());
         }
-        if (value instanceof byte[] bytes) {
-            String decoded = new String(bytes, StandardCharsets.UTF_8).trim();
+        if (value instanceof byte[]) {
+            String decoded = new String((byte[]) value, StandardCharsets.UTF_8).trim();
             if (!decoded.isEmpty()) {
                 return Optional.of(decoded);
             }
         }
-        if (value instanceof List<?> list) {
-            for (Object element : list) {
+        if (value instanceof List<?>) {
+            for (Object element : (List<?>) value) {
                 Optional<String> coerced = coerceToString(element);
                 if (coerced.isPresent()) {
                     return coerced;

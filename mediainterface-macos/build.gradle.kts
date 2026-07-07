@@ -12,8 +12,12 @@ dependencies {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_16
-    targetCompatibility = JavaVersion.VERSION_16
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.release.set(11)
 }
 
 val nativeMacDir = layout.projectDirectory.dir("src/native/macos")

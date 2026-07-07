@@ -13,8 +13,12 @@ dependencies {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_16
-    targetCompatibility = JavaVersion.VERSION_16
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.release.set(11)
 }
 
 application {
@@ -23,6 +27,14 @@ application {
 
 tasks.withType<JavaExec>().configureEach {
     jvmArgs("-Dorg.slf4j.simpleLogger.defaultLogLevel=debug")
+    // Examples need only a small heap; without a cap the JVM reserves up to
+    // 25% of machine RAM and rarely gives it back to the OS.
+    maxHeapSize = "128m"
+    // Forward -Dmediainterface.* from the Gradle command line to the forked
+    // example JVM (JavaExec does not inherit Gradle's system properties).
+    System.getProperties().stringPropertyNames()
+        .filter { it.startsWith("mediainterface.") }
+        .forEach { systemProperty(it, System.getProperty(it)) }
 }
 
 val exampleMainClasses = mapOf(

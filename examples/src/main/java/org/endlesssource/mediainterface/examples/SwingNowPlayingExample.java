@@ -28,6 +28,7 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.concurrent.ExecutorService;
@@ -146,12 +147,18 @@ public final class SwingNowPlayingExample {
         });
 
         AtomicBoolean inFlight = new AtomicBoolean(false);
+        // Accessed only from the single-threaded polling scheduler below, so it
+        // needs no synchronization. Keeps the decoded+scaled artwork so the
+        // 200ms poll does not re-decode and high-quality-rescale the same image
+        // on every tick (that work belongs here, off the EDT, and only when the
+        // track actually changes).
+        ArtworkCache artworkCache = new ArtworkCache();
         polling.scheduleWithFixedDelay(() -> {
             if (!inFlight.compareAndSet(false, true)) {
                 return;
             }
             try {
-                UiSnapshot snapshot = collectSnapshot(media);
+                UiSnapshot snapshot = collectSnapshot(media, artworkCache);
                 latestSnapshot.set(snapshot);
                 SwingUtilities.invokeLater(() -> applySnapshot(snapshot, artwork, tree, seekSlider, seekLabel, seekDragging.get()));
             } finally {
@@ -160,7 +167,7 @@ public final class SwingNowPlayingExample {
         }, 0L, 200L, TimeUnit.MILLISECONDS);
     }
 
-    private static UiSnapshot collectSnapshot(SystemMediaInterface media) {
+    private static UiSnapshot collectSnapshot(SystemMediaInterface media, ArtworkCache artworkCache) {
         Optional<MediaSession> sessionOpt = media.getActiveSession();
         if (sessionOpt.isEmpty()) {
             return UiSnapshot.empty();
@@ -177,7 +184,7 @@ public final class SwingNowPlayingExample {
         }
 
         NowPlaying now = nowOpt.get();
-        ImageIcon icon = decodeArtwork(now.getArtwork().orElse(null));
+        ImageIcon icon = artworkCache.scaledFor(now.getArtwork().orElse(null));
         Long durationMs = now.getDuration().map(Duration::toMillis).orElse(null);
         Long positionMs = now.getPosition().map(Duration::toMillis).orElse(null);
         boolean seekEnabled = caps.canSeek() && durationMs != null && durationMs > 0;
@@ -208,8 +215,10 @@ public final class SwingNowPlayingExample {
             artworkLabel.setText("No Artwork");
             artworkLabel.setIcon(null);
         } else {
-            Image scaled = snapshot.icon().getImage().getScaledInstance(ART_SIZE, ART_SIZE, Image.SCALE_SMOOTH);
-            artworkLabel.setIcon(new ImageIcon(scaled));
+            // Already decoded and scaled off the EDT; the ArtworkCache hands back
+            // the same instance while the track is unchanged, so setIcon no-ops
+            // (no repaint) on ticks where only the position advanced.
+            artworkLabel.setIcon(snapshot.icon());
             artworkLabel.setText("");
         }
     }
@@ -272,8 +281,35 @@ public final class SwingNowPlayingExample {
         return out.toString();
     }
 
-    private static ImageIcon decodeArtwork(String artwork) {
-        return ArtworkDecoder.decodeBytes(artwork).map(ImageIcon::new).orElse(null);
+    private static ImageIcon decodeAndScale(String artwork) {
+        ImageIcon raw = ArtworkDecoder.decodeBytes(artwork).map(ImageIcon::new).orElse(null);
+        if (raw == null) {
+            return null;
+        }
+        // SCALE_SMOOTH is expensive; run it here on the poll thread (not the EDT)
+        // and force the load now so the EDT only ever assigns a ready icon.
+        Image scaled = raw.getImage().getScaledInstance(ART_SIZE, ART_SIZE, Image.SCALE_SMOOTH);
+        return new ImageIcon(scaled);
+    }
+
+    /**
+     * Caches the decoded and scaled artwork icon keyed by the raw artwork
+     * string, so the periodic poll only pays the decode/scale cost when the
+     * artwork actually changes. Not thread-safe: use from a single thread.
+     */
+    private static final class ArtworkCache {
+        private String key;
+        private ImageIcon scaled;
+
+        ImageIcon scaledFor(String artwork) {
+            String normalized = artwork == null ? "" : artwork;
+            if (Objects.equals(normalized, key)) {
+                return scaled;
+            }
+            key = normalized;
+            scaled = normalized.isEmpty() ? null : decodeAndScale(normalized);
+            return scaled;
+        }
     }
 
     private static String formatDuration(Duration duration) {
@@ -290,11 +326,41 @@ public final class SwingNowPlayingExample {
         return formatDuration(Duration.ofMillis(millis));
     }
 
-    private record UiSnapshot(String tree,
-                              ImageIcon icon,
-                              boolean seekEnabled,
-                              Long durationMs,
-                              Long positionMs) {
+    private static final class UiSnapshot {
+        private final String tree;
+        private final ImageIcon icon;
+        private final boolean seekEnabled;
+        private final Long durationMs;
+        private final Long positionMs;
+
+        UiSnapshot(String tree, ImageIcon icon, boolean seekEnabled, Long durationMs, Long positionMs) {
+            this.tree = tree;
+            this.icon = icon;
+            this.seekEnabled = seekEnabled;
+            this.durationMs = durationMs;
+            this.positionMs = positionMs;
+        }
+
+        String tree() {
+            return tree;
+        }
+
+        ImageIcon icon() {
+            return icon;
+        }
+
+        boolean seekEnabled() {
+            return seekEnabled;
+        }
+
+        Long durationMs() {
+            return durationMs;
+        }
+
+        Long positionMs() {
+            return positionMs;
+        }
+
         static UiSnapshot empty() {
             return new UiSnapshot(
                     "MediaSession\n└─ nowPlaying: <empty>\n",

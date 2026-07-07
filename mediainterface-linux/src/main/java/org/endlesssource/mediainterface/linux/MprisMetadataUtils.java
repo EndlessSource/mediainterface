@@ -21,9 +21,9 @@ final class MprisMetadataUtils {
         }
 
         Object value;
-        if (metadata instanceof Variant<?> metadataVariant) {
+        if (metadata instanceof Variant<?>) {
             // Handle wrapped Variant case (most MPRIS implementations)
-            value = metadataVariant.getValue();
+            value = ((Variant<?>) metadata).getValue();
         } else if (metadata instanceof Map<?, ?>) {
             // Handle direct Map case (Firefox and some other implementations)
             value = metadata;
@@ -31,34 +31,34 @@ final class MprisMetadataUtils {
             return Optional.empty();
         }
 
-        if (!(value instanceof Map<?, ?> rawMetadata) || rawMetadata.isEmpty()) {
+        if (!(value instanceof Map<?, ?>) || ((Map<?, ?>) value).isEmpty()) {
             return Optional.empty();
         }
 
-        return Optional.of(normalizeMap(rawMetadata));
+        return Optional.of(normalizeMap((Map<?, ?>) value));
     }
 
     private static Map<String, Object> normalizeMap(Map<?, ?> rawMap) {
         Map<String, Object> normalized = new HashMap<>();
         rawMap.forEach((key, rawValue) -> {
-            if (key instanceof String keyStr) {
-                normalized.put(keyStr, unwrap(rawValue));
+            if (key instanceof String) {
+                normalized.put((String) key, unwrap(rawValue));
             }
         });
         return normalized;
     }
 
     static Object unwrap(Object value) {
-        if (value instanceof Variant<?> variant) {
-            return unwrap(variant.getValue());
+        if (value instanceof Variant<?>) {
+            return unwrap(((Variant<?>) value).getValue());
         }
 
-        if (value instanceof Map<?, ?> nestedMap) {
-            return normalizeMap(nestedMap);
+        if (value instanceof Map<?, ?>) {
+            return normalizeMap((Map<?, ?>) value);
         }
 
-        if (value instanceof Collection<?> collection) {
-            return collection.stream()
+        if (value instanceof Collection<?>) {
+            return ((Collection<?>) value).stream()
                     .map(MprisMetadataUtils::unwrap)
                     .collect(Collectors.toList());
         }

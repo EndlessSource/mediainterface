@@ -10,6 +10,7 @@ typedef void (*MRGetIsPlayingFn)(dispatch_queue_t, void (^)(Boolean));
 typedef void (*MRGetNowPlayingAppPidFn)(dispatch_queue_t, void (^)(int));
 typedef bool (*MRSendCommandFn)(int, CFDictionaryRef);
 typedef bool (*MRSetElapsedTimeFn)(double);
+typedef void (*MRRegisterForNowPlayingNotificationsFn)(dispatch_queue_t);
 
 static CFBundleRef gMediaRemoteBundle = NULL;
 static MRGetNowPlayingInfoFn gGetNowPlayingInfo = NULL;
@@ -17,6 +18,7 @@ static MRGetIsPlayingFn gGetIsPlaying = NULL;
 static MRGetNowPlayingAppPidFn gGetNowPlayingAppPid = NULL;
 static MRSendCommandFn gSendCommand = NULL;
 static MRSetElapsedTimeFn gSetElapsedTime = NULL;
+static MRRegisterForNowPlayingNotificationsFn gRegisterForNotifications = NULL;
 static dispatch_queue_t gSerialDispatchQueue = NULL;
 static const int WAIT_TIMEOUT_MILLIS = 2000;
 
@@ -77,9 +79,10 @@ static void ensureLoaded(void) {
     gGetNowPlayingAppPid = (MRGetNowPlayingAppPidFn)resolveFunctionPointer(CFSTR("MRMediaRemoteGetNowPlayingApplicationPID"));
     gSendCommand = (MRSendCommandFn)resolveFunctionPointer(CFSTR("MRMediaRemoteSendCommand"));
     gSetElapsedTime = (MRSetElapsedTimeFn)resolveFunctionPointer(CFSTR("MRMediaRemoteSetElapsedTime"));
+    gRegisterForNotifications = (MRRegisterForNowPlayingNotificationsFn)resolveFunctionPointer(CFSTR("MRMediaRemoteRegisterForNowPlayingNotifications"));
     gSerialDispatchQueue = dispatch_queue_create("mediainterface.macos.serial", DISPATCH_QUEUE_SERIAL);
-    logLine([NSString stringWithFormat:@"Symbols: getInfo=%d getIsPlaying=%d getPid=%d send=%d seek=%d",
-             gGetNowPlayingInfo != NULL, gGetIsPlaying != NULL, gGetNowPlayingAppPid != NULL, gSendCommand != NULL, gSetElapsedTime != NULL]);
+    logLine([NSString stringWithFormat:@"Symbols: getInfo=%d getIsPlaying=%d getPid=%d send=%d seek=%d register=%d",
+             gGetNowPlayingInfo != NULL, gGetIsPlaying != NULL, gGetNowPlayingAppPid != NULL, gSendCommand != NULL, gSetElapsedTime != NULL, gRegisterForNotifications != NULL]);
 }
 
 static NSString* escapeJson(NSString* s) {
@@ -416,8 +419,102 @@ void adapter_get(void) {
 
 void adapter_get_env(void) { adapter_get(); }
 
+// --- Streaming mode ----------------------------------------------------------
+// Registers for MediaRemote now-playing notifications and emits one JSON line
+// per (coalesced) change until the parent closes stdin. This lets consumers
+// keep a single long-lived process instead of spawning one per poll.
+
+static dispatch_queue_t gStreamQueue = NULL;
+static BOOL gStreamEmitPending = NO;
+
+static void streamEmitSnapshot(void) {
+    @autoreleasepool {
+        NSDictionary* info = fetchNowPlayingInfo();
+        NSNumber* playing = fetchIsPlaying();
+        NSString* appBundle = fetchNowPlayingBundleIdentifier(info);
+        NSString* output = jsonOutput(info, playing, appBundle);
+        fprintf(stdout, "%s\n", [output UTF8String]);
+        fflush(stdout);
+    }
+}
+
+// Coalesces notification bursts (info/isPlaying/app change arrive together)
+// into a single snapshot emitted after a short quiet period.
+static void streamScheduleEmit(void) {
+    dispatch_async(gStreamQueue, ^{
+        if (gStreamEmitPending) {
+            return;
+        }
+        gStreamEmitPending = YES;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(80 * NSEC_PER_MSEC)), gStreamQueue, ^{
+            gStreamEmitPending = NO;
+            streamEmitSnapshot();
+        });
+    });
+}
+
+// Exits when the parent process closes our stdin, so no orphaned adapter
+// processes are left behind if the JVM dies without cleanup.
+static void streamWatchParentExit(void) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+        char buf[256];
+        ssize_t n;
+        do {
+            n = read(STDIN_FILENO, buf, sizeof(buf));
+        } while (n > 0 || (n < 0 && errno == EINTR));
+        logLine(@"stdin closed; exiting stream");
+        exit(0);
+    });
+}
+
 void adapter_stream(void) {
-    adapter_get();
+    ensureLoaded();
+    if (!gGetNowPlayingInfo) {
+        fprintf(stderr, "Failed to stream: MediaRemote unavailable\n");
+        exit(1);
+    }
+
+    gStreamQueue = dispatch_queue_create("mediainterface.macos.stream", DISPATCH_QUEUE_SERIAL);
+
+    if (gRegisterForNotifications) {
+        gRegisterForNotifications(gStreamQueue);
+    } else {
+        logLine(@"MRMediaRemoteRegisterForNowPlayingNotifications unavailable; relying on heartbeat only");
+    }
+
+    NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+    NSArray<NSString*>* names = @[
+        @"kMRMediaRemoteNowPlayingInfoDidChangeNotification",
+        @"kMRMediaRemoteNowPlayingApplicationIsPlayingDidChangeNotification",
+        @"kMRMediaRemoteNowPlayingApplicationDidChangeNotification",
+        @"kMRMediaRemoteNowPlayingPlaybackQueueDidChangeNotification",
+    ];
+    for (NSString* name in names) {
+        [center addObserverForName:name object:nil queue:nil usingBlock:^(NSNotification* note) {
+            (void)note;
+            streamScheduleEmit();
+        }];
+    }
+
+    // Slow heartbeat: heals missed notifications and position drift.
+    dispatch_source_t heartbeat = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, gStreamQueue);
+    dispatch_source_set_timer(heartbeat,
+                              dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)),
+                              (uint64_t)(10 * NSEC_PER_SEC),
+                              (uint64_t)(1 * NSEC_PER_SEC));
+    dispatch_source_set_event_handler(heartbeat, ^{
+        streamEmitSnapshot();
+    });
+    dispatch_resume(heartbeat);
+
+    streamWatchParentExit();
+
+    // Initial snapshot so consumers see current state immediately.
+    dispatch_async(gStreamQueue, ^{
+        streamEmitSnapshot();
+    });
+
+    dispatch_main();
 }
 
 void adapter_stream_env(void) { adapter_stream(); }

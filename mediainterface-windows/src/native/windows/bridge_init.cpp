@@ -54,6 +54,9 @@ Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativeShutdown(JNIEnv*
         trace_native(env, "nativeShutdown decremented but retained apartment");
         return;
     }
+    // Drop cached WinRT objects and event registrations before the apartment
+    // is torn down.
+    shutdown_session_cache();
     if (g_apartmentInitializedByBridge && g_apartmentInitThread == std::this_thread::get_id()) {
         trace_native(env, "nativeShutdown calling uninit_apartment");
         uninit_apartment();
@@ -62,6 +65,40 @@ Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativeShutdown(JNIEnv*
     }
     g_apartmentInitializedByBridge = false;
     g_apartmentInitThread = std::thread::id{};
+}
+
+// Subscribes to WinRT change events and synchronously delivers the current
+// session list plus every session's state through the push callbacks before
+// returning, so the Java side starts warm without ever pulling state.
+// Returns false when the WinRT session manager is unavailable (caller should
+// retry later); subsequent updates arrive purely through events.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativeStartEventStream(JNIEnv* env, jclass clazz) {
+    ensure_trace_bridge(env, clazz);
+    trace_native(env, "nativeStartEventStream enter");
+    try {
+        if (!ensure_manager(env)) {
+            trace_native(env, "nativeStartEventStream manager unavailable");
+            return JNI_FALSE;
+        }
+        std::optional<std::vector<std::string>> ids = list_session_ids(env);
+        if (!ids.has_value()) {
+            trace_native(env, "nativeStartEventStream enumeration failed");
+            return JNI_FALSE;
+        }
+        push_session_list();
+        for (auto const& id : ids.value()) {
+            push_session_state(id);
+        }
+        trace_native(env, "nativeStartEventStream delivered initial state");
+        return JNI_TRUE;
+    } catch (const hresult_error& e) {
+        trace_hresult(env, "nativeStartEventStream", e);
+        return JNI_FALSE;
+    } catch (...) {
+        trace_native(env, "nativeStartEventStream unknown exception");
+        return JNI_FALSE;
+    }
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

@@ -22,32 +22,32 @@ namespace {
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativePlay(JNIEnv* env, jclass clazz, jstring sessionId) {
-    return session_command(env, clazz, sessionId, "nativePlay", [](auto const& s) { return s.TryPlayAsync().get(); });
+    return session_command(env, clazz, sessionId, "nativePlay", [](auto const& s) { return await_with_timeout(s.TryPlayAsync()); });
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativePause(JNIEnv* env, jclass clazz, jstring sessionId) {
-    return session_command(env, clazz, sessionId, "nativePause", [](auto const& s) { return s.TryPauseAsync().get(); });
+    return session_command(env, clazz, sessionId, "nativePause", [](auto const& s) { return await_with_timeout(s.TryPauseAsync()); });
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativeTogglePlayPause(JNIEnv* env, jclass clazz, jstring sessionId) {
-    return session_command(env, clazz, sessionId, "nativeTogglePlayPause", [](auto const& s) { return s.TryTogglePlayPauseAsync().get(); });
+    return session_command(env, clazz, sessionId, "nativeTogglePlayPause", [](auto const& s) { return await_with_timeout(s.TryTogglePlayPauseAsync()); });
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativeNext(JNIEnv* env, jclass clazz, jstring sessionId) {
-    return session_command(env, clazz, sessionId, "nativeNext", [](auto const& s) { return s.TrySkipNextAsync().get(); });
+    return session_command(env, clazz, sessionId, "nativeNext", [](auto const& s) { return await_with_timeout(s.TrySkipNextAsync()); });
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativePrevious(JNIEnv* env, jclass clazz, jstring sessionId) {
-    return session_command(env, clazz, sessionId, "nativePrevious", [](auto const& s) { return s.TrySkipPreviousAsync().get(); });
+    return session_command(env, clazz, sessionId, "nativePrevious", [](auto const& s) { return await_with_timeout(s.TrySkipPreviousAsync()); });
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativeStop(JNIEnv* env, jclass clazz, jstring sessionId) {
-    return session_command(env, clazz, sessionId, "nativeStop", [](auto const& s) { return s.TryStopAsync().get(); });
+    return session_command(env, clazz, sessionId, "nativeStop", [](auto const& s) { return await_with_timeout(s.TryStopAsync()); });
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -66,7 +66,7 @@ Java_org_endlesssource_mediainterface_windows_WinRtBridge_nativeSeek(JNIEnv* env
             return JNI_FALSE;
         }
         uint64_t requested = static_cast<uint64_t>(millis_to_ticks(positionMillis));
-        bool ok = session.value().TryChangePlaybackPositionAsync(requested).get();
+        bool ok = await_with_timeout(session.value().TryChangePlaybackPositionAsync(requested));
         trace_native(env, std::string("nativeSeek result=") + (ok ? "true" : "false"));
         return ok ? JNI_TRUE : JNI_FALSE;
     } catch (const hresult_error& e) {

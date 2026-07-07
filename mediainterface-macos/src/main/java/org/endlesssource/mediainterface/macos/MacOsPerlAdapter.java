@@ -3,8 +3,10 @@ package org.endlesssource.mediainterface.macos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -12,6 +14,7 @@ import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -79,7 +82,78 @@ final class MacOsPerlAdapter {
                 return parsed;
             }
         }
-        return new Snapshot(false, null, null, null, null, null, null, null, "u");
+        return Snapshot.empty();
+    }
+
+    /**
+     * Starts the adapter in streaming mode: one long-lived process that emits
+     * a JSON snapshot line whenever the system now-playing state changes
+     * (plus a slow heartbeat). This avoids spawning a process per poll.
+     *
+     * @param consumer receives each parsed snapshot (on the reader thread)
+     * @param onExit invoked once when the stream process terminates
+     * @return handle to the stream, or empty if the process could not start
+     */
+    Optional<StreamHandle> startStream(Consumer<Snapshot> consumer, Runnable onExit) {
+        ProcessBuilder pb = new ProcessBuilder();
+        pb.command().add("/usr/bin/perl");
+        pb.command().add(scriptPath.toAbsolutePath().toString());
+        pb.command().add(frameworkPath.toAbsolutePath().toString());
+        if (testClientPath != null) {
+            pb.command().add(testClientPath.toAbsolutePath().toString());
+        }
+        pb.command().add("stream");
+        pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+        try {
+            Process process = pb.start();
+            Thread reader = new Thread(() -> {
+                try (BufferedReader in = new BufferedReader(
+                        new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = in.readLine()) != null) {
+                        if (line.isBlank()) {
+                            continue;
+                        }
+                        Snapshot snapshot = parseOfficialJsonSnapshot(line.trim());
+                        if (snapshot != null) {
+                            consumer.accept(snapshot);
+                        }
+                    }
+                } catch (IOException e) {
+                    logger.debug("Adapter stream reader terminated: {}", e.getMessage());
+                } finally {
+                    onExit.run();
+                }
+            }, "mediainterface-macos-stream-reader");
+            reader.setDaemon(true);
+            reader.start();
+            logger.info("Started MediaRemote adapter stream (pid={})", process.pid());
+            return Optional.of(new StreamHandle(process));
+        } catch (Exception e) {
+            logger.warn("Failed to start MediaRemote adapter stream: {}", e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    static final class StreamHandle {
+        private final Process process;
+
+        private StreamHandle(Process process) {
+            this.process = process;
+        }
+
+        boolean isAlive() {
+            return process.isAlive();
+        }
+
+        void close() {
+            // Closing stdin signals the adapter to exit; destroy as a fallback.
+            try {
+                process.getOutputStream().close();
+            } catch (IOException ignored) {
+            }
+            process.destroy();
+        }
     }
 
     boolean play() {
@@ -179,7 +253,7 @@ final class MacOsPerlAdapter {
 
     private Snapshot parseOfficialJsonSnapshot(String json) {
         if (json == null || json.isBlank() || "null".equals(json.trim())) {
-            return new Snapshot(false, null, null, null, null, null, null, null, "u");
+            return Snapshot.empty();
         }
         String title = extractJsonString(json, "title");
         String artist = extractJsonString(json, "artist");
@@ -193,49 +267,10 @@ final class MacOsPerlAdapter {
         Double elapsedNowSeconds = extractJsonDouble(json, "elapsedTimeNow").orElse(null);
         Double timestampEpochSeconds = extractJsonDouble(json, "timestamp").orElse(null);
         Double playbackRate = extractJsonDouble(json, "playbackRate").orElse(null);
-        Long positionMs = computePositionMillis(
-                elapsedSeconds,
-                elapsedNowSeconds,
-                timestampEpochSeconds,
-                playbackRate,
-                playingRaw,
-                durationMs
-        );
         boolean active = title != null && !title.isBlank();
         String artwork = toDataUri(artworkData, artworkMimeType);
-        return new Snapshot(active, app, title, artist, album, artwork, durationMs, positionMs, playingRaw);
-    }
-
-    private static Long computePositionMillis(Double elapsedSeconds,
-                                              Double elapsedNowSeconds,
-                                              Double timestampEpochSeconds,
-                                              Double playbackRate,
-                                              String playingRaw,
-                                              Long durationMs) {
-        Double baseElapsed = elapsedSeconds != null ? elapsedSeconds : elapsedNowSeconds;
-        if (baseElapsed == null) {
-            return null;
-        }
-
-        double currentSeconds = baseElapsed;
-        boolean isPlaying = "1".equals(playingRaw);
-        if (isPlaying && timestampEpochSeconds != null && playbackRate != null && playbackRate > 0.0d) {
-            double nowEpochSeconds = System.currentTimeMillis() / 1000.0d;
-            double delta = Math.max(0.0d, nowEpochSeconds - timestampEpochSeconds);
-            currentSeconds = baseElapsed + (delta * playbackRate);
-        } else if (elapsedNowSeconds != null) {
-            currentSeconds = elapsedNowSeconds;
-        }
-
-        if (currentSeconds < 0.0d) {
-            currentSeconds = 0.0d;
-        }
-
-        long positionMs = Math.round(currentSeconds * 1000.0d);
-        if (durationMs != null && durationMs > 0L && positionMs > durationMs) {
-            positionMs = durationMs;
-        }
-        return positionMs;
+        return new Snapshot(active, app, title, artist, album, artwork, durationMs, playingRaw,
+                elapsedSeconds, elapsedNowSeconds, timestampEpochSeconds, playbackRate);
     }
 
     private static String extractJsonString(String json, String key) {
@@ -387,19 +422,131 @@ final class MacOsPerlAdapter {
         throw new IllegalStateException("Unsupported macOS JVM architecture for adapter: " + arch);
     }
 
-    private record BundledAdapterAssets(Path frameworkPath, Path testClientPath) {
+    private static final class BundledAdapterAssets {
+        private final Path frameworkPath;
+        private final Path testClientPath;
+
+        private BundledAdapterAssets(Path frameworkPath, Path testClientPath) {
+            this.frameworkPath = frameworkPath;
+            this.testClientPath = testClientPath;
+        }
+
+        Path frameworkPath() {
+            return frameworkPath;
+        }
+
+        Path testClientPath() {
+            return testClientPath;
+        }
     }
 
-    record Snapshot(
-            boolean active,
-            String app,
-            String title,
-            String artist,
-            String album,
-            String artwork,
-            Long durationMs,
-            Long positionMs,
-            String playingRaw
-    ) {
+    /**
+     * One now-playing snapshot. Raw elapsed/timestamp/rate values are kept so
+     * the playback position can be projected at read time instead of being
+     * frozen at parse time.
+     */
+    static final class Snapshot {
+        private final boolean active;
+        private final String app;
+        private final String title;
+        private final String artist;
+        private final String album;
+        private final String artwork;
+        private final Long durationMs;
+        private final String playingRaw;
+        private final Double elapsedSeconds;
+        private final Double elapsedNowSeconds;
+        private final Double timestampEpochSeconds;
+        private final Double playbackRate;
+
+        Snapshot(boolean active, String app, String title, String artist, String album,
+                 String artwork, Long durationMs, String playingRaw,
+                 Double elapsedSeconds, Double elapsedNowSeconds,
+                 Double timestampEpochSeconds, Double playbackRate) {
+            this.active = active;
+            this.app = app;
+            this.title = title;
+            this.artist = artist;
+            this.album = album;
+            this.artwork = artwork;
+            this.durationMs = durationMs;
+            this.playingRaw = playingRaw;
+            this.elapsedSeconds = elapsedSeconds;
+            this.elapsedNowSeconds = elapsedNowSeconds;
+            this.timestampEpochSeconds = timestampEpochSeconds;
+            this.playbackRate = playbackRate;
+        }
+
+        static Snapshot empty() {
+            return new Snapshot(false, null, null, null, null, null, null, "u",
+                    null, null, null, null);
+        }
+
+        Snapshot withDurationMs(Long newDurationMs) {
+            return new Snapshot(active, app, title, artist, album, artwork, newDurationMs, playingRaw,
+                    elapsedSeconds, elapsedNowSeconds, timestampEpochSeconds, playbackRate);
+        }
+
+        boolean active() {
+            return active;
+        }
+
+        String app() {
+            return app;
+        }
+
+        String title() {
+            return title;
+        }
+
+        String artist() {
+            return artist;
+        }
+
+        String album() {
+            return album;
+        }
+
+        String artwork() {
+            return artwork;
+        }
+
+        Long durationMs() {
+            return durationMs;
+        }
+
+        String playingRaw() {
+            return playingRaw;
+        }
+
+        /**
+         * Projects the playback position to the given wall-clock time.
+         */
+        Long positionMsAt(long nowEpochMillis) {
+            Double baseElapsed = elapsedSeconds != null ? elapsedSeconds : elapsedNowSeconds;
+            if (baseElapsed == null) {
+                return null;
+            }
+
+            double currentSeconds = baseElapsed;
+            boolean isPlaying = "1".equals(playingRaw);
+            if (isPlaying && timestampEpochSeconds != null && playbackRate != null && playbackRate > 0.0d) {
+                double nowEpochSeconds = nowEpochMillis / 1000.0d;
+                double delta = Math.max(0.0d, nowEpochSeconds - timestampEpochSeconds);
+                currentSeconds = baseElapsed + (delta * playbackRate);
+            } else if (elapsedNowSeconds != null) {
+                currentSeconds = elapsedNowSeconds;
+            }
+
+            if (currentSeconds < 0.0d) {
+                currentSeconds = 0.0d;
+            }
+
+            long positionMs = Math.round(currentSeconds * 1000.0d);
+            if (durationMs != null && durationMs > 0L && positionMs > durationMs) {
+                positionMs = durationMs;
+            }
+            return positionMs;
+        }
     }
 }

@@ -79,30 +79,29 @@ final class WindowsMediaTransportControls implements MediaTransportControls {
         return cachedPlaybackState;
     }
 
-    PlaybackState refreshPlaybackState() {
-        int code = WinRtBridge.nativeGetPlaybackState(sessionId);
-        cachedPlaybackState = switch (code) {
-            case 0 -> PlaybackState.PLAYING;
-            case 1 -> PlaybackState.PAUSED;
-            case 2 -> PlaybackState.STOPPED;
-            default -> PlaybackState.UNKNOWN;
-        };
-        return cachedPlaybackState;
-    }
-
     @Override
     public TransportCapabilities getCapabilities() {
         return cachedCapabilities;
     }
 
-    TransportCapabilities refreshCapabilities() {
-        boolean[] caps = WinRtBridge.nativeGetCapabilities(sessionId);
-        if (caps == null || caps.length < 6) {
-            logger.debug("Falling back to default capabilities for session {}", sessionId);
+    void updatePlaybackState(PlaybackState state) {
+        cachedPlaybackState = state == null ? PlaybackState.UNKNOWN : state;
+    }
+
+    /**
+     * @param caps six '0'/'1' chars: play, pause, next, prev, stop, seek
+     */
+    void updateCapabilities(String caps) {
+        if (caps == null || caps.length() < 6) {
             cachedCapabilities = DEFAULT_CAPABILITIES;
-            return cachedCapabilities;
+            return;
         }
-        cachedCapabilities = new TransportCapabilities(caps[0], caps[1], caps[2], caps[3], caps[4], caps[5]);
-        return cachedCapabilities;
+        cachedCapabilities = new TransportCapabilities(
+                caps.charAt(0) == '1',
+                caps.charAt(1) == '1',
+                caps.charAt(2) == '1',
+                caps.charAt(3) == '1',
+                caps.charAt(4) == '1',
+                caps.charAt(5) == '1');
     }
 }

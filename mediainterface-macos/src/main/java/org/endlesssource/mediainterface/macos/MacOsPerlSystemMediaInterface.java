@@ -8,16 +8,23 @@ import org.endlesssource.mediainterface.api.SystemMediaOptions;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 final class MacOsPerlSystemMediaInterface implements SystemMediaInterface {
     private final SystemMediaOptions options;
     private final MacOsPerlMediaSession session;
+    private final ScheduledExecutorService executor;
     private final List<MediaSessionListener> listeners = new CopyOnWriteArrayList<>();
+    private volatile boolean closed;
 
     MacOsPerlSystemMediaInterface(SystemMediaOptions options) {
         this.options = options;
+        this.executor = Executors.newSingleThreadScheduledExecutor(daemonThreadFactory());
         MacOsPerlAdapter adapter = new MacOsPerlAdapter();
-        this.session = new MacOsPerlMediaSession(adapter, options.isEventDrivenEnabled(), options.getSessionUpdateInterval(), options.isPositionUpdatesEnabled());
+        this.session = new MacOsPerlMediaSession(adapter, options, executor);
     }
 
     @Override
@@ -61,7 +68,21 @@ final class MacOsPerlSystemMediaInterface implements SystemMediaInterface {
 
     @Override
     public void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
         session.close();
+        executor.shutdownNow();
         listeners.clear();
+    }
+
+    private static ThreadFactory daemonThreadFactory() {
+        AtomicInteger counter = new AtomicInteger();
+        return runnable -> {
+            Thread thread = new Thread(runnable, "mediainterface-macos-" + counter.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
     }
 }

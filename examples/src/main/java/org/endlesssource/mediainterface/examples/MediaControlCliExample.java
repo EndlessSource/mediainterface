@@ -54,25 +54,50 @@ public final class MediaControlCliExample {
                 String arg = parts.length > 1 ? parts[1].trim() : "";
 
                 switch (cmd) {
-                    case "help" -> printHelp();
-                    case "quit", "exit" -> {
+                    case "help":
+                        printHelp();
+                        break;
+                    case "quit":
+                    case "exit":
                         return;
-                    }
-                    case "list" -> printSessions(media.getAllSessions(), selected);
-                    case "active" -> {
+                    case "list":
+                        printSessions(media.getAllSessions(), selected);
+                        break;
+                    case "active":
                         selected = media.getActiveSession().orElse(null);
                         printSelected(selected);
-                    }
-                    case "select" -> selected = selectSessionByIndex(media.getAllSessions(), arg, selected);
-                    case "info" -> printNowPlaying(selected);
-                    case "play" -> runControl(selected, "play", s -> s.getControls().play());
-                    case "pause" -> runControl(selected, "pause", s -> s.getControls().pause());
-                    case "toggle" -> runControl(selected, "toggle", s -> s.getControls().togglePlayPause());
-                    case "next" -> runControl(selected, "next", s -> s.getControls().next());
-                    case "prev", "previous" -> runControl(selected, "previous", s -> s.getControls().previous());
-                    case "stop" -> runControl(selected, "stop", s -> s.getControls().stop());
-                    case "seek" -> runSeek(selected, arg);
-                    default -> System.out.println("Unknown command: " + cmd + " (type 'help')");
+                        break;
+                    case "select":
+                        selected = selectSessionByIndex(media.getAllSessions(), arg, selected);
+                        break;
+                    case "info":
+                        printNowPlaying(selected);
+                        break;
+                    case "play":
+                        runControl(selected, "play", s -> s.getControls().play());
+                        break;
+                    case "pause":
+                        runControl(selected, "pause", s -> s.getControls().pause());
+                        break;
+                    case "toggle":
+                        runControl(selected, "toggle", s -> s.getControls().togglePlayPause());
+                        break;
+                    case "next":
+                        runControl(selected, "next", s -> s.getControls().next());
+                        break;
+                    case "prev":
+                    case "previous":
+                        runControl(selected, "previous", s -> s.getControls().previous());
+                        break;
+                    case "stop":
+                        runControl(selected, "stop", s -> s.getControls().stop());
+                        break;
+                    case "seek":
+                        runSeek(selected, arg);
+                        break;
+                    default:
+                        System.out.println("Unknown command: " + cmd + " (type 'help')");
+                        break;
                 }
             }
         } catch (Exception e) {

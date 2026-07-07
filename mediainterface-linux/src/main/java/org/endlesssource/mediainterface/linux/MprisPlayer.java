@@ -1,13 +1,12 @@
 package org.endlesssource.mediainterface.linux;
 
 import org.freedesktop.dbus.annotations.DBusInterfaceName;
+import org.freedesktop.dbus.exceptions.DBusException;
 import org.freedesktop.dbus.interfaces.DBusInterface;
-import org.freedesktop.dbus.types.Variant;
-
-import java.util.Map;
+import org.freedesktop.dbus.messages.DBusSignal;
 
 @DBusInterfaceName("org.mpris.MediaPlayer2.Player")
-interface MprisPlayer extends DBusInterface {
+public interface MprisPlayer extends DBusInterface {
     void Next();
     void Previous();
     void Pause();
@@ -36,4 +35,22 @@ interface MprisPlayer extends DBusInterface {
     boolean getCanPause();
     boolean getCanSeek();
     boolean getCanControl();
+
+    /**
+     * MPRIS Seeked signal, emitted by players when the playback position
+     * changes in a way that is not the natural progression of time.
+     * Position is in microseconds.
+     */
+    class Seeked extends DBusSignal {
+        private final long position;
+
+        public Seeked(String path, long position) throws DBusException {
+            super(path, position);
+            this.position = position;
+        }
+
+        public long getPosition() {
+            return position;
+        }
+    }
 }

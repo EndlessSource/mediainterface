@@ -5,76 +5,83 @@ import org.endlesssource.mediainterface.api.MediaSessionListener;
 import org.endlesssource.mediainterface.api.MediaTransportControls;
 import org.endlesssource.mediainterface.api.NowPlaying;
 import org.endlesssource.mediainterface.api.PlaybackState;
+import org.endlesssource.mediainterface.api.SystemMediaOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * A single Windows SMTC session.
+ *
+ * <p>In event-driven mode all state arrives as pushed snapshots (built inside
+ * the native WinRT change handlers and routed here through
+ * {@link WinRtBridge.NativeEventSink}); this class performs no native reads
+ * at all. In polling mode the snapshot is pulled over JNI at the configured
+ * interval instead. Either way, reads are served from the in-memory cache and
+ * the playback position is projected from a monotonic anchor at read
+ * time.</p>
+ */
 final class WindowsMediaSession implements MediaSession {
     private static final Logger logger = LoggerFactory.getLogger(WindowsMediaSession.class);
-    private static final long POSITION_EVENT_TICK_MS = 200L;
 
     private final String sessionId;
     private final boolean eventDrivenEnabled;
     private final boolean positionUpdatesEnabled;
-    private final long updateIntervalMs;
     private final WindowsMediaTransportControls controls;
     private final List<MediaSessionListener> listeners = new CopyOnWriteArrayList<>();
     private final ScheduledExecutorService executor;
+    private final List<ScheduledFuture<?>> scheduledTasks = new CopyOnWriteArrayList<>();
     private volatile boolean closed;
-    private volatile Optional<NowPlaying> cachedNowPlaying = Optional.empty();
-    private volatile boolean cachedActive;
+
     private volatile String cachedAppName;
-
-    private volatile PlaybackState lastPlaybackState = PlaybackState.UNKNOWN;
-    private volatile Snapshot lastSnapshot;
+    private volatile boolean cachedActive;
+    private volatile PlaybackState cachedState = PlaybackState.UNKNOWN;
+    private volatile MediaSnapshot cachedMedia;
+    private volatile PositionAnchor anchor = PositionAnchor.EMPTY;
     private volatile Boolean lastActive;
-    private volatile double lastPlaybackRate = 1.0d;
-    private volatile long lastSnapshotMonotonicNanos = System.nanoTime();
 
-    WindowsMediaSession(String sessionId, boolean eventDrivenEnabled, Duration updateInterval, boolean positionUpdatesEnabled) {
+    WindowsMediaSession(String sessionId, SystemMediaOptions options, ScheduledExecutorService executor) {
         this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
-        this.eventDrivenEnabled = eventDrivenEnabled;
-        this.positionUpdatesEnabled = positionUpdatesEnabled;
-        this.updateIntervalMs = Objects.requireNonNull(updateInterval, "updateInterval").toMillis();
+        this.eventDrivenEnabled = options.isEventDrivenEnabled();
+        this.positionUpdatesEnabled = options.isPositionUpdatesEnabled();
         this.controls = new WindowsMediaTransportControls(sessionId);
-        this.executor = Executors.newSingleThreadScheduledExecutor();
+        this.executor = executor;
         this.cachedAppName = sessionId;
-        // Warm cache immediately so first reads/listener registration see current state.
-        checkForChanges();
-        executor.scheduleWithFixedDelay(this::checkForChanges, updateIntervalMs, updateIntervalMs, TimeUnit.MILLISECONDS);
+
+        long updateIntervalMs = options.getSessionUpdateInterval().toMillis();
+
         if (eventDrivenEnabled) {
-            executor.scheduleWithFixedDelay(this::emitProjectedPositionChanges,
-                    POSITION_EVENT_TICK_MS, POSITION_EVENT_TICK_MS, TimeUnit.MILLISECONDS);
+            // State arrives exclusively through pushed snapshots; the initial
+            // one is delivered right after creation (start stream or the
+            // SessionsChanged handler pushes every session's state).
+            if (positionUpdatesEnabled) {
+                // Pure-CPU tick emitting position progression while playing;
+                // involves no JNI traffic.
+                scheduledTasks.add(executor.scheduleWithFixedDelay(
+                        this::emitPositionTick, updateIntervalMs, updateIntervalMs, TimeUnit.MILLISECONDS));
+            }
+        } else {
+            // Warm the cache immediately so first reads see current state.
+            refreshNow();
+            scheduledTasks.add(executor.scheduleWithFixedDelay(
+                    this::refreshNow, updateIntervalMs, updateIntervalMs, TimeUnit.MILLISECONDS));
         }
     }
 
     @Override
     public Optional<NowPlaying> getNowPlaying() {
-        return cachedNowPlaying;
-    }
-
-    private Optional<NowPlaying> queryNowPlayingFromNative() {
-        String[] payload = WinRtBridge.nativeGetNowPlaying(sessionId);
-        if (payload == null || payload.length == 0) {
+        MediaSnapshot media = cachedMedia;
+        if (media == null) {
             return Optional.empty();
         }
-        if (!positionUpdatesEnabled && payload.length > 5) {
-            payload[5] = null;
-        }
-        Snapshot snapshot = Snapshot.fromPayload(payload);
-        if (snapshot.isEmpty()) {
-            return Optional.empty();
-        }
-        return Optional.of(snapshot.toNowPlaying());
+        return Optional.of(media.toNowPlaying(currentPositionMs(media)));
     }
 
     @Override
@@ -110,140 +117,231 @@ final class WindowsMediaSession implements MediaSession {
     void close() {
         closed = true;
         listeners.clear();
-        executor.shutdownNow();
+        for (ScheduledFuture<?> task : scheduledTasks) {
+            task.cancel(false);
+        }
+        scheduledTasks.clear();
     }
 
-    private void checkForChanges() {
+    /**
+     * Applies a state payload pushed from a native WinRT change handler.
+     * Called on WinRT threads: cache updates happen inline (cheap, in-memory)
+     * while listener notifications are dispatched to the executor. Serialized
+     * because WinRT may fire handlers concurrently on its thread pool.
+     */
+    synchronized void applyPushedSnapshot(String[] payload) {
+        if (closed || payload == null || payload.length < 12) {
+            return;
+        }
+        applySnapshot(payload);
+    }
+
+    /** Polling-mode refresh: pulls the snapshot from the bridge. */
+    private void refreshNow() {
         if (closed) {
             return;
         }
         try {
-            PlaybackState currentState = controls.refreshPlaybackState();
-            controls.refreshCapabilities();
-
-            String appName = WinRtBridge.nativeGetSessionAppName(sessionId);
-            if (appName != null && !appName.isBlank()) {
-                cachedAppName = appName;
+            String[] payload = WinRtBridge.nativeGetSessionSnapshot(sessionId);
+            if (payload == null || payload.length < 12) {
+                return;
             }
+            applySnapshot(payload);
+        } catch (Exception e) {
+            logger.debug("Error refreshing session {}: {}", sessionId, e.getMessage());
+        }
+    }
 
-            boolean active = WinRtBridge.nativeIsSessionActive(sessionId);
-            cachedActive = active;
+    private void applySnapshot(String[] payload) {
+        String appName = payload[0];
+        if (appName != null && !appName.isBlank()) {
+            cachedAppName = appName;
+        }
+        boolean active = Boolean.parseBoolean(payload[1]);
+        PlaybackState state = parseState(payload[2]);
+        MediaSnapshot media = MediaSnapshot.fromPayload(payload);
 
-            Optional<NowPlaying> currentNowPlaying = queryNowPlayingFromNative();
-            cachedNowPlaying = currentNowPlaying;
-            Snapshot snapshot = currentNowPlaying.map(Snapshot::fromNowPlaying).orElseGet(() -> Snapshot.fromPayload(null));
-            lastPlaybackRate = snapshot.playbackRate();
-            lastSnapshotMonotonicNanos = System.nanoTime();
+        controls.updatePlaybackState(state);
+        controls.updateCapabilities(payload[3]);
 
-            if (eventDrivenEnabled) {
-                if (currentState != lastPlaybackState) {
-                    lastPlaybackState = currentState;
-                    listeners.forEach(listener -> listener.onPlaybackStateChanged(this, currentState));
+        PlaybackState oldState = cachedState;
+        MediaSnapshot oldMedia = cachedMedia;
+        Boolean oldActive = lastActive;
+
+        cachedState = state;
+        cachedActive = active;
+        lastActive = active;
+        cachedMedia = media;
+        anchor = media == null
+                ? PositionAnchor.EMPTY
+                : new PositionAnchor(media.positionMs, System.nanoTime(), state, media.playbackRate());
+
+        if (!eventDrivenEnabled || closed) {
+            return;
+        }
+        boolean stateChanged = state != oldState;
+        boolean activeChanged = oldActive == null || active != oldActive;
+        boolean mediaChanged = !sameMedia(oldMedia, media);
+        if (!stateChanged && !activeChanged && !mediaChanged) {
+            return;
+        }
+        // Pushed snapshots arrive on WinRT threads; user listeners run on the
+        // executor so they can never block native event delivery.
+        try {
+            executor.execute(() -> {
+                if (closed) {
+                    return;
                 }
-
-                if (lastActive == null || active != lastActive) {
-                    lastActive = active;
+                if (stateChanged) {
+                    listeners.forEach(listener -> listener.onPlaybackStateChanged(this, state));
+                }
+                if (activeChanged) {
                     listeners.forEach(listener -> listener.onSessionActiveChanged(this, active));
                 }
-
-                boolean includePositionChanges = currentState == PlaybackState.PLAYING;
-                if (!snapshot.sameMedia(lastSnapshot, includePositionChanges)) {
-                    lastSnapshot = snapshot;
-                    listeners.forEach(listener -> listener.onNowPlayingChanged(this, currentNowPlaying));
+                if (mediaChanged) {
+                    Optional<NowPlaying> now = getNowPlaying();
+                    listeners.forEach(listener -> listener.onNowPlayingChanged(this, now));
                 }
-            }
-        } catch (Exception e) {
-            logger.debug("Error checking session changes for {}: {}", sessionId, e.getMessage());
+            });
+        } catch (Exception ignored) {
+            // Executor already shut down.
         }
     }
 
-    private void emitProjectedPositionChanges() {
-        if (closed || !eventDrivenEnabled || !positionUpdatesEnabled || lastPlaybackState != PlaybackState.PLAYING) {
+    private void emitPositionTick() {
+        if (closed || listeners.isEmpty() || cachedState != PlaybackState.PLAYING) {
             return;
         }
-        Snapshot base = lastSnapshot;
-        if (base == null || base.positionMs().isEmpty()) {
+        MediaSnapshot media = cachedMedia;
+        if (media == null || media.positionMs == null) {
             return;
         }
-
-        long nowNanos = System.nanoTime();
-        Snapshot projected = base.projectedTo(nowNanos, lastSnapshotMonotonicNanos, lastPlaybackRate);
-        if (projected.sameMedia(base, true)) {
-            return;
-        }
-
-        lastSnapshot = projected;
-        lastSnapshotMonotonicNanos = nowNanos;
-        cachedNowPlaying = Optional.of(projected.toNowPlaying());
-        listeners.forEach(listener -> listener.onNowPlayingChanged(this, cachedNowPlaying));
+        Optional<NowPlaying> now = getNowPlaying();
+        listeners.forEach(listener -> listener.onNowPlayingChanged(this, now));
     }
 
-    private record Snapshot(Optional<String> title,
-                            Optional<String> artist,
-                            Optional<String> album,
-                            Optional<String> artwork,
-                            Optional<Long> durationMs,
-                            Optional<Long> positionMs,
-                            boolean live,
-                            String metadataPairs) {
-        static Snapshot fromPayload(String[] payload) {
-            if (payload == null || payload.length == 0) {
-                return new Snapshot(Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(),
-                        Optional.empty(), Optional.empty(), false, "");
+    private Long currentPositionMs(MediaSnapshot media) {
+        if (!positionUpdatesEnabled) {
+            return null;
+        }
+        PositionAnchor current = anchor;
+        Long projected = current.projectMs(System.nanoTime());
+        if (projected == null) {
+            return null;
+        }
+        if (media.durationMs != null && media.durationMs > 0 && projected > media.durationMs) {
+            return media.durationMs;
+        }
+        return projected;
+    }
+
+    private static PlaybackState parseState(String code) {
+        if ("0".equals(code)) {
+            return PlaybackState.PLAYING;
+        }
+        if ("1".equals(code)) {
+            return PlaybackState.PAUSED;
+        }
+        if ("2".equals(code)) {
+            return PlaybackState.STOPPED;
+        }
+        return PlaybackState.UNKNOWN;
+    }
+
+    private static boolean sameMedia(MediaSnapshot a, MediaSnapshot b) {
+        if (a == null || b == null) {
+            return a == b;
+        }
+        return Objects.equals(a.title, b.title)
+                && Objects.equals(a.artist, b.artist)
+                && Objects.equals(a.album, b.album)
+                && Objects.equals(a.artwork, b.artwork)
+                && Objects.equals(a.durationMs, b.durationMs)
+                && a.live == b.live
+                && normalizeMetadataForComparison(a.metadataPairs)
+                        .equals(normalizeMetadataForComparison(b.metadataPairs));
+    }
+
+    private static String normalizeMetadataForComparison(String metadata) {
+        if (metadata == null || metadata.isBlank()) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder();
+        for (String line : metadata.split("\\R")) {
+            if (line == null || line.isBlank()) {
+                continue;
             }
-            return new Snapshot(
-                    optional(payload, 0),
-                    optional(payload, 1),
-                    optional(payload, 2),
-                    optional(payload, 3),
-                    parseLong(payload, 4),
-                    parseLong(payload, 5),
-                    optional(payload, 6).map(Boolean::parseBoolean).orElse(false),
-                    optional(payload, 7).orElse("")
-            );
-        }
-
-        static Snapshot fromNowPlaying(NowPlaying nowPlaying) {
-            return new Snapshot(
-                    nowPlaying.getTitle(),
-                    nowPlaying.getArtist(),
-                    nowPlaying.getAlbum(),
-                    nowPlaying.getArtwork(),
-                    nowPlaying.getDuration().map(Duration::toMillis),
-                    nowPlaying.getPosition().map(Duration::toMillis),
-                    nowPlaying.isLiveStream(),
-                    encodeMetadata(nowPlaying.getAdditionalMetadata())
-            );
-        }
-
-        boolean isEmpty() {
-            return title.isEmpty() && artist.isEmpty() && album.isEmpty() && artwork.isEmpty() && durationMs.isEmpty();
-        }
-
-        boolean sameMedia(Snapshot other, boolean includePositionChanges) {
-            if (other == null) {
-                return false;
+            int sep = line.indexOf('=');
+            if (sep <= 0) {
+                out.append(line).append('\n');
+                continue;
             }
-            boolean samePosition = !includePositionChanges
-                    || positionBucket(positionMs) == positionBucket(other.positionMs);
-            String normalizedMetadata = normalizeMetadataForComparison(metadataPairs);
-            String otherNormalizedMetadata = normalizeMetadataForComparison(other.metadataPairs);
-            return title.equals(other.title)
-                    && artist.equals(other.artist)
-                    && album.equals(other.album)
-                    && artwork.equals(other.artwork)
-                    && durationMs.equals(other.durationMs)
-                    && samePosition
-                    && live == other.live
-                    && normalizedMetadata.equals(otherNormalizedMetadata);
+            String key = line.substring(0, sep).trim();
+            if (isVolatileMetadataKey(key)) {
+                continue;
+            }
+            out.append(line).append('\n');
+        }
+        return out.toString();
+    }
+
+    private static boolean isVolatileMetadataKey(String key) {
+        return "timelineRawPositionMs".equals(key)
+                || "timelineLastUpdatedTicks".equals(key)
+                || "timelineNowTicks".equals(key)
+                || "playbackRate".equals(key)
+                || "playbackStatus".equals(key);
+    }
+
+    /**
+     * Immutable media fields from one native snapshot (no position; the
+     * position is projected from {@link PositionAnchor} at read time).
+     */
+    private static final class MediaSnapshot {
+        final String title;
+        final String artist;
+        final String album;
+        final String artwork;
+        final Long durationMs;
+        final Long positionMs;
+        final boolean live;
+        final String metadataPairs;
+
+        private MediaSnapshot(String title, String artist, String album, String artwork,
+                              Long durationMs, Long positionMs, boolean live, String metadataPairs) {
+            this.title = title;
+            this.artist = artist;
+            this.album = album;
+            this.artwork = artwork;
+            this.durationMs = durationMs;
+            this.positionMs = positionMs;
+            this.live = live;
+            this.metadataPairs = metadataPairs == null ? "" : metadataPairs;
+        }
+
+        static MediaSnapshot fromPayload(String[] payload) {
+            String title = emptyToNull(payload[4]);
+            String artist = emptyToNull(payload[5]);
+            String album = emptyToNull(payload[6]);
+            String artwork = emptyToNull(payload[7]);
+            Long durationMs = parseLong(payload[8]);
+            if (title == null && artist == null && album == null && artwork == null && durationMs == null) {
+                return null;
+            }
+            return new MediaSnapshot(
+                    title,
+                    artist,
+                    album,
+                    artwork,
+                    durationMs,
+                    parseLong(payload[9]),
+                    Boolean.parseBoolean(payload[10]),
+                    payload[11]);
         }
 
         double playbackRate() {
-            if (metadataPairs == null || metadataPairs.isBlank()) {
-                return 1.0d;
-            }
             for (String line : metadataPairs.split("\\R")) {
-                if (line == null || line.isBlank() || !line.startsWith("playbackRate=")) {
+                if (line == null || !line.startsWith("playbackRate=")) {
                     continue;
                 }
                 String value = line.substring("playbackRate=".length()).trim();
@@ -259,108 +357,66 @@ final class WindowsMediaSession implements MediaSession {
             return 1.0d;
         }
 
-        Snapshot projectedTo(long nowMonotonicNanos, long anchorMonotonicNanos, double playbackRate) {
-            if (positionMs.isEmpty()) {
-                return this;
-            }
-            if (playbackRate <= 0.0d) {
-                return this;
-            }
-            long elapsedNanos = Math.max(0L, nowMonotonicNanos - anchorMonotonicNanos);
-            long deltaMs = Math.max(0L, Math.round((elapsedNanos / 1_000_000.0d) * playbackRate));
-            if (deltaMs <= 0L) {
-                return this;
-            }
-
-            long current = positionMs.get();
-            long next = current + deltaMs;
-            if (durationMs.isPresent()) {
-                next = Math.min(next, durationMs.get());
-            }
-            if (next == current) {
-                return this;
-            }
-            return new Snapshot(title, artist, album, artwork, durationMs, Optional.of(next), live, metadataPairs);
-        }
-
-        WindowsNowPlaying toNowPlaying() {
+        WindowsNowPlaying toNowPlaying(Long positionMsNow) {
             String[] payload = new String[] {
-                    title.orElse(null),
-                    artist.orElse(null),
-                    album.orElse(null),
-                    artwork.orElse(null),
-                    durationMs.map(String::valueOf).orElse(null),
-                    positionMs.map(String::valueOf).orElse(null),
+                    title,
+                    artist,
+                    album,
+                    artwork,
+                    durationMs == null ? null : String.valueOf(durationMs),
+                    positionMsNow == null ? null : String.valueOf(positionMsNow),
                     String.valueOf(live),
                     metadataPairs.isBlank() ? null : metadataPairs
             };
             return new WindowsNowPlaying(payload);
         }
 
-        private static Optional<String> optional(String[] payload, int index) {
-            if (payload.length <= index || payload[index] == null || payload[index].isBlank()) {
-                return Optional.empty();
-            }
-            return Optional.of(payload[index]);
+        private static String emptyToNull(String value) {
+            return value == null || value.isBlank() ? null : value;
         }
 
-        private static Optional<Long> parseLong(String[] payload, int index) {
-            Optional<String> value = optional(payload, index);
-            if (value.isEmpty()) {
-                return Optional.empty();
+        private static Long parseLong(String value) {
+            if (value == null || value.isBlank()) {
+                return null;
             }
             try {
-                return Optional.of(Long.parseLong(value.get()));
+                return Long.parseLong(value);
             } catch (NumberFormatException ignored) {
-                return Optional.empty();
+                return null;
             }
-        }
-
-        private static String encodeMetadata(Map<String, String> metadata) {
-            if (metadata == null || metadata.isEmpty()) {
-                return "";
-            }
-            StringBuilder out = new StringBuilder();
-            metadata.entrySet().stream()
-                    .sorted(Map.Entry.comparingByKey())
-                    .forEach(entry -> out.append(entry.getKey()).append("=").append(entry.getValue()).append("\n"));
-            return out.toString();
-        }
-
-        private static long positionBucket(Optional<Long> positionMs) {
-            return positionMs.map(ms -> ms / 1000L).orElse(-1L);
-        }
-
-        private static String normalizeMetadataForComparison(String metadata) {
-            if (metadata == null || metadata.isBlank()) {
-                return "";
-            }
-            StringBuilder out = new StringBuilder();
-            for (String line : metadata.split("\\R")) {
-                if (line == null || line.isBlank()) {
-                    continue;
-                }
-                int sep = line.indexOf('=');
-                if (sep <= 0) {
-                    out.append(line).append('\n');
-                    continue;
-                }
-                String key = line.substring(0, sep).trim();
-                if (isVolatileMetadataKey(key)) {
-                    continue;
-                }
-                out.append(line).append('\n');
-            }
-            return out.toString();
-        }
-
-        private static boolean isVolatileMetadataKey(String key) {
-            return "timelineRawPositionMs".equals(key)
-                    || "timelineLastUpdatedTicks".equals(key)
-                    || "timelineNowTicks".equals(key)
-                    || "playbackRate".equals(key)
-                    || "playbackStatus".equals(key);
         }
     }
 
+    /**
+     * Immutable position anchor: a known position at a monotonic timestamp,
+     * projected forward while playing.
+     */
+    private static final class PositionAnchor {
+        static final PositionAnchor EMPTY =
+                new PositionAnchor(null, System.nanoTime(), PlaybackState.UNKNOWN, 1.0d);
+
+        final Long positionMs;
+        final long monotonicNanos;
+        final PlaybackState state;
+        final double rate;
+
+        PositionAnchor(Long positionMs, long monotonicNanos, PlaybackState state, double rate) {
+            this.positionMs = positionMs;
+            this.monotonicNanos = monotonicNanos;
+            this.state = state;
+            this.rate = rate;
+        }
+
+        Long projectMs(long nowNanos) {
+            if (positionMs == null) {
+                return null;
+            }
+            if (state != PlaybackState.PLAYING || rate <= 0.0d) {
+                return positionMs;
+            }
+            long elapsedNanos = Math.max(0L, nowNanos - monotonicNanos);
+            long deltaMs = Math.max(0L, Math.round((elapsedNanos / 1_000_000.0d) * rate));
+            return positionMs + deltaMs;
+        }
+    }
 }

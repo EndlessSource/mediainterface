@@ -13,6 +13,7 @@
 Access the operating systems "Media Remote"/Now Playing interface from Java/Kotlin. Works on all modern operating systems.
 
 ## Features
+- Event-driven with very low idle CPU on Windows and Linux, using OS notifications instead of polling (see [Event-driven pipeline](#event-driven-pipeline))
 - Get current system media sessions
 - Support for multiple apps playing at the same time
 - Query name, album, artist, artwork data, duration and additional metadata
@@ -22,6 +23,8 @@ Access the operating systems "Media Remote"/Now Playing interface from Java/Kotl
 - Cross-platform universal interface (one API for all platforms)
 
 ## Quickstart
+
+Requires Java 11 or newer.
 
 Use `mediainterface-all` to get the core API + all platform providers in one dependency.
 
@@ -142,6 +145,33 @@ public class Main {
 ### More examples
 
 See [`examples` module](https://github.com/EndlessSource/mediainterface/tree/main/examples/src/main/java/org/endlesssource/mediainterface/examples)
+
+## Event-driven pipeline
+
+On Windows and Linux, event-driven mode uses the operating system's own change notifications rather than polling on a timer. Because of this, the library only does work when something actually changes. While media is paused or nothing is happening, it stays close to 0% CPU.
+
+On Windows, the native bridge subscribes to the WinRT System Media Transport Controls events (session list, media properties, playback info, and timeline changes). When one fires, it reads the affected session's state once and hands it up to Java, which keeps its own copy. Your reads are served from that cached copy, so the library doesn't call back into the OS on every access. On Linux, the same idea is built on D-Bus/MPRIS2 signals, which arrive as changes happen.
+
+In practice this means your listener callbacks (`onNowPlayingChanged`, `onPlaybackStateChanged`, `onSessionActiveChanged`, `onSessionAdded`/`onSessionRemoved`) fire right when a real change occurs, and an idle system stays idle. Callbacks run on the library's own executor, so a slow listener won't hold up event delivery from the OS.
+
+```java
+SystemMediaOptions options = SystemMediaOptions.defaults()
+        .withEventDrivenEnabled(true); // default
+
+try (SystemMediaInterface media = SystemMediaFactory.createSystemInterface(options)) {
+    media.addSessionListener(new MediaSessionListener() {
+        @Override
+        public void onNowPlayingChanged(MediaSession session, Optional<NowPlaying> nowPlaying) {
+            // fired only when the track/metadata actually changes
+        }
+    });
+    // ... your app keeps running; no polling loop needed
+}
+```
+
+One exception: if you want the play-head to advance smoothly between OS updates (for a progress bar, say), the library emits interpolated position updates on a light timer. That's the only periodic work in event-driven mode, and it does no OS or native calls, since the position is computed from the last known value. You can turn it off with `SystemMediaOptions.withPositionUpdatesEnabled(false)` if you'd rather have no periodic activity at all.
+
+Polling mode (`withEventDrivenEnabled(false)`) is still available everywhere as a fallback, and macOS uses a polling-based backend.
 
 ## Platform support
 
